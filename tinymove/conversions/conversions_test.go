@@ -60,3 +60,31 @@ func TestSmallExchangeMoveToMove(t *testing.T) {
 	is.Equal(m.LeaveString(), "BDEF")
 	is.Equal(m.TilesPlayed(), 3)
 }
+
+// TestExchangeMoveDesignatedBlankRoundTrip locks down a latent bug where
+// ExchangeMove computed a per-slot blank mask but never packed it into the
+// TinyMove. Undesignated blanks (MachineLetter(0)) round-tripped correctly
+// by coincidence (the slot value was already 0), but a designated blank
+// such as `A | 0x80` would lose its blank flag and decode as the
+// underlying letter. With the mask now packed into bits 12..18 the round
+// trip is exact for both forms.
+func TestExchangeMoveDesignatedBlankRoundTrip(t *testing.T) {
+	is := is.New(t)
+	alph := testhelpers.EnglishAlphabet()
+
+	// Slot 1 is a designated blank standing in for A; slot 0 is a regular
+	// tile, slot 2 is an undesignated blank.
+	designated := tilemapping.MachineLetter(1) | 0x80
+	tiles := []tilemapping.MachineLetter{2, designated, 0}
+	sm := tinymove.ExchangeMove(tiles)
+	is.Equal(sm.IsExchange(), true)
+	is.Equal(sm.TilesPlayed(), 3)
+
+	var buf [7]tilemapping.MachineLetter
+	got := sm.ExchangeTiles(buf[:0])
+	is.Equal(len(got), 3)
+	is.Equal(got[0], tilemapping.MachineLetter(2)) // regular B
+	is.Equal(got[1], tilemapping.MachineLetter(0)) // designated blank → blank
+	is.Equal(got[2], tilemapping.MachineLetter(0)) // undesignated blank
+	_ = alph
+}

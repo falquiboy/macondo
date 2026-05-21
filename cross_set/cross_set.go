@@ -131,6 +131,13 @@ func updateForMove(g Generator, b *Board, m *move.Move) {
 }
 
 func updateForSmallMove(g Generator, b *Board, m *tinymove.SmallMove, moveTiles *[board.MaxBoardDim]tilemapping.MachineLetter) {
+	// Defense-in-depth: exchanges place no tiles on the board, so the cross
+	// sets must remain untouched. game.playSmall* already short-circuits
+	// before reaching this path for exchanges, but bypassing callers must not
+	// recompute around random tile-slot data.
+	if m.IsExchange() {
+		return
+	}
 	row, col, vertical := m.CoordsAndVertical()
 	// Every tile placed by this new move creates new "across" words, and we need
 	// to update the cross sets on both sides of these across words, as well

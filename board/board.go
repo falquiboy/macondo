@@ -716,6 +716,13 @@ func (g *GameBoard) PlayMove(m *move.Move) {
 // PlaySmallMove plays a SmallMove on a board. We unroll the PlaceMoveTiles and
 // updateAnchorsForMove here with some modifications.
 func (g *GameBoard) PlaySmallMove(m *tinymove.SmallMove, moveTiles *[MaxBoardDim]tilemapping.MachineLetter, rack *tilemapping.Rack) {
+	// Defense-in-depth: an exchange must never reach the board. game.playSmall*
+	// already routes exchanges to bag.Exchange before calling here, but a
+	// stray caller passing an IsExchange SmallMove would otherwise corrupt
+	// the board by interpreting the tile slots as positional placements.
+	if m.IsExchange() {
+		return
+	}
 
 	rowStart, colStart, vertical := m.CoordsAndVertical()
 	ri, ci := 0, 1

@@ -58,6 +58,12 @@ func ExchangeMove(tiles []tilemapping.MachineLetter) SmallMove {
 		moveCode |= (uint64(val) << bts)
 		bts += 6
 	}
+	// Pack the per-slot blank flags into bits 12..18 of the TinyMove,
+	// matching the schema ExchangeTiles decodes via BlanksBitMask. Without
+	// this, designated blanks fed to ExchangeMove would round-trip as their
+	// underlying letter instead of as a blank (MachineLetter(0)). Undesignated
+	// blanks already round-trip correctly because their slot value is 0.
+	moveCode |= uint64(blanksMask) << 12
 	tilesExchanged := uint8(len(tiles))
 	tilesDescriptor := tilesExchanged + (tilesExchanged << 3)
 	return SmallMove{
