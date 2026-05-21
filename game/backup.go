@@ -50,12 +50,36 @@ func (g *Game) backupState() {
 	st.playing = g.playing
 	st.scorelessTurns = g.scorelessTurns
 	st.lastScorelessTurns = g.lastScorelessTurns
+	st.onturn = g.onturn
+	st.turnnum = g.turnnum
 	st.players.copyFrom(g.players)
 	if g.backupMode == SimulationMode {
-		st.onturn = g.onturn
-		st.turnnum = g.turnnum
 		g.stackPtr++
 	}
+}
+
+func (g *Game) restoreLastBackup() {
+	if g.backupMode == NoBackup {
+		return
+	}
+	var b *stateBackup
+	if g.backupMode == SimulationMode {
+		if g.stackPtr == 0 {
+			return
+		}
+		b = g.stateStack[g.stackPtr-1]
+		g.stackPtr--
+	} else {
+		b = g.stateStack[0]
+	}
+	g.board.CopyFrom(b.board)
+	g.bag.CopyFrom(b.bag)
+	g.playing = b.playing
+	g.players.copyFrom(b.players)
+	g.scorelessTurns = b.scorelessTurns
+	g.lastScorelessTurns = b.lastScorelessTurns
+	g.onturn = b.onturn
+	g.turnnum = b.turnnum
 }
 
 func copyPlayers(ps playerStates) playerStates {
@@ -99,11 +123,14 @@ func (g *Game) SetStateStackLength(length int) {
 		// Initialize each element of the stack now to avoid having
 		// allocations and GC.
 		g.stateStack[idx] = &stateBackup{
-			board:          g.board.Copy(),
-			bag:            g.bag.Copy(),
-			playing:        g.playing,
-			scorelessTurns: g.scorelessTurns,
-			players:        copyPlayers(g.players),
+			board:              g.board.Copy(),
+			bag:                g.bag.Copy(),
+			playing:            g.playing,
+			scorelessTurns:     g.scorelessTurns,
+			lastScorelessTurns: g.lastScorelessTurns,
+			onturn:             g.onturn,
+			turnnum:            g.turnnum,
+			players:            copyPlayers(g.players),
 		}
 	}
 }

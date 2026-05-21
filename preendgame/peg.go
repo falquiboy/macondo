@@ -872,6 +872,7 @@ func (s *Solver) Solve(ctx context.Context) ([]*PreEndgamePlay, error) {
 				if len(lastWinners) > 0 {
 					log.Info().Int("len(lastWinners)", len(lastWinners)).Msg("returning-last-winners")
 					winners = lastWinners
+					s.plays = lastWinners
 				} else {
 					// Otherwise keep winners
 					log.Info().Str("topWinner", winners[0].String()).Msg("no-last-winners")
@@ -1051,6 +1052,7 @@ func (s *Solver) SolutionStats(maxMoves int) string {
 	}
 	fmt.Fprintf(&ss, "❌ marks plays cut off early\n")
 	fmt.Fprintf(&ss, "[] brackets indicate order does not matter\n")
+	fmt.Fprintf(&ss, "exchange rows summarize long outcome lists by weighted branch count\n")
 
 	return ss.String()
 }
@@ -1075,6 +1077,7 @@ func (s *Solver) SingleSolutionStats(play *PreEndgamePlay, pctOnly bool) string 
 		}
 	}
 	var wins, draws, losses []string
+	var winWeight, drawWeight, lossWeight int
 	var outcomeStr string
 	for _, outcome := range play.outcomesArray {
 		// uv := tilemapping.MachineWord(outcome.tiles).UserVisible(s.game.Alphabet())
@@ -1083,10 +1086,13 @@ func (s *Solver) SingleSolutionStats(play *PreEndgamePlay, pctOnly bool) string 
 			switch outcome.outcome {
 			case PEGWin:
 				wins = append(wins, uf)
+				winWeight += outcome.ct
 			case PEGDraw:
 				draws = append(draws, uf)
+				drawWeight += outcome.ct
 			case PEGLoss:
 				losses = append(losses, uf)
+				lossWeight += outcome.ct
 			}
 		}
 	}
@@ -1094,14 +1100,18 @@ func (s *Solver) SingleSolutionStats(play *PreEndgamePlay, pctOnly bool) string 
 	slices.Sort(draws)
 	slices.Sort(losses)
 
-	if len(wins) > 0 {
-		outcomeStr += fmt.Sprintf("👍: %s", strings.Join(wins, " "))
-	}
-	if len(draws) > 0 {
-		outcomeStr += fmt.Sprintf(" 🤝: %s", strings.Join(draws, " "))
-	}
-	if len(losses) > 0 {
-		outcomeStr += fmt.Sprintf(" 👎: %s", strings.Join(losses, " "))
+	if play.Play.Action() == move.MoveTypeExchange {
+		outcomeStr = exchangeOutcomeSummary(wins, draws, losses, winWeight, drawWeight, lossWeight)
+	} else {
+		if len(wins) > 0 {
+			outcomeStr += fmt.Sprintf("👍: %s", strings.Join(wins, " "))
+		}
+		if len(draws) > 0 {
+			outcomeStr += fmt.Sprintf(" 🤝: %s", strings.Join(draws, " "))
+		}
+		if len(losses) > 0 {
+			outcomeStr += fmt.Sprintf(" 👎: %s", strings.Join(losses, " "))
+		}
 	}
 	if pctOnly {
 		return fmt.Sprintf("%-20s%-8s%%%-32s", s.game.Board().MoveDescriptionWithPlaythrough(play.Play),
@@ -1110,6 +1120,31 @@ func (s *Solver) SingleSolutionStats(play *PreEndgamePlay, pctOnly bool) string 
 	return fmt.Sprintf("%-20s%-8s%-8s%-9s%-32s%-2s\n",
 		s.game.Board().MoveDescriptionWithPlaythrough(play.Play),
 		pts, wpStats, spdStats, outcomeStr, ignore)
+}
+
+func exchangeOutcomeSummary(wins, draws, losses []string, winWeight, drawWeight, lossWeight int) string {
+	const maxDetailedLabels = 36
+	format := func(icon string, labels []string, weight int) string {
+		if len(labels) == 0 {
+			return ""
+		}
+		if len(labels) > maxDetailedLabels {
+			return fmt.Sprintf("%s: %d weighted/%d labels, first %d: %s",
+				icon, weight, len(labels), maxDetailedLabels, strings.Join(labels[:maxDetailedLabels], " "))
+		}
+		return fmt.Sprintf("%s: %s", icon, strings.Join(labels, " "))
+	}
+	parts := []string{}
+	if s := format("👍", wins, winWeight); s != "" {
+		parts = append(parts, s)
+	}
+	if s := format("🤝", draws, drawWeight); s != "" {
+		parts = append(parts, s)
+	}
+	if s := format("👎", losses, lossWeight); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Solver) ShortDetails() string {

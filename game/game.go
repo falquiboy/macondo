@@ -410,6 +410,10 @@ func (g *Game) ValidateMove(m *move.Move) ([]tilemapping.MachineWord, error) {
 			return nil, fmt.Errorf("not allowed to exchange with fewer than %d tiles in the bag",
 				g.exchangeLimit)
 		}
+		if len(m.Tiles()) > g.bag.TilesRemaining() {
+			return nil, fmt.Errorf("cannot exchange %d tile(s) with only %d in the bag",
+				len(m.Tiles()), g.bag.TilesRemaining())
+		}
 		// Make sure we have the tiles we are trying to exchange.
 		for _, t := range m.Tiles() {
 			// Leave implicitly checks the tiles here.
@@ -553,15 +557,31 @@ func (g *Game) playMove(m *move.Move, addToHistory bool, millis int, updateCross
 		return err
 	}
 
-	if g.backupMode != NoBackup {
-		g.backupState()
-	}
+	var wordsFormed []tilemapping.MachineWord
 	if addToHistory {
 		// Also, validate that the move follows the rules.
-		wordsFormed, err := g.ValidateMove(m)
+		var err error
+		wordsFormed, err = g.ValidateMove(m)
 		if err != nil {
 			return err
 		}
+	} else if m.Action() == move.MoveTypeExchange && len(m.Tiles()) > g.bag.TilesRemaining() {
+		return fmt.Errorf("cannot exchange %d tile(s) with only %d in the bag",
+			len(m.Tiles()), g.bag.TilesRemaining())
+	}
+
+	backedUp := false
+	playSucceeded := false
+	if g.backupMode != NoBackup {
+		g.backupState()
+		backedUp = true
+		defer func() {
+			if backedUp && !playSucceeded {
+				g.restoreLastBackup()
+			}
+		}()
+	}
+	if addToHistory {
 		g.lastWordsFormed = wordsFormed
 	}
 
@@ -671,6 +691,7 @@ func (g *Game) playMove(m *move.Move, addToHistory bool, millis int, updateCross
 	}
 
 	g.turnnum++
+	playSucceeded = true
 
 	// log.Debug().Interface("history", g.history).Int("onturn", g.onturn).Int("turnnum", g.turnnum).
 	// 	Msg("newhist")
@@ -699,8 +720,19 @@ func (g *Game) PlaySmallMoveNoCrossSet(m *tinymove.SmallMove) (
 func (g *Game) playSmallMove(m *tinymove.SmallMove, updateCrossSets bool) (
 	*[board.MaxBoardDim]tilemapping.MachineLetter, error) {
 
+	if m.IsExchange() {
+		return nil, errors.New("PlaySmallMove cannot play exchanges without drawing")
+	}
+	backedUp := false
+	playSucceeded := false
 	if g.backupMode != NoBackup {
 		g.backupState()
+		backedUp = true
+		defer func() {
+			if backedUp && !playSucceeded {
+				g.restoreLastBackup()
+			}
+		}()
 	}
 	if m.IsPass() {
 		if g.playing == pb.PlayState_GAME_OVER {
@@ -709,8 +741,6 @@ func (g *Game) playSmallMove(m *tinymove.SmallMove, updateCrossSets bool) (
 		g.lastScorelessTurns = g.scorelessTurns
 		g.scorelessTurns++
 		g.players[g.onturn].turns += 1
-	} else if m.IsExchange() {
-		return nil, errors.New("PlaySmallMove cannot play exchanges without drawing")
 	} else {
 		// It's a tile-play move.
 		g.board.PlaySmallMove(m, &g.stripBackup, g.players[g.onturn].rack)
@@ -745,6 +775,7 @@ func (g *Game) playSmallMove(m *tinymove.SmallMove, updateCrossSets bool) (
 	}
 
 	g.turnnum++
+	playSucceeded = true
 
 	// log.Debug().Interface("history", g.history).Int("onturn", g.onturn).Int("turnnum", g.turnnum).
 	// 	Msg("newhist")
@@ -759,8 +790,32 @@ func (g *Game) playSmallMove(m *tinymove.SmallMove, updateCrossSets bool) (
 func (g *Game) PlaySmallMoveWithDraw(m *tinymove.SmallMove) (
 	*[board.MaxBoardDim]tilemapping.MachineLetter, error) {
 
+	var exchanged []tilemapping.MachineLetter
+	var leave tilemapping.MachineWord
+	if m.IsExchange() {
+		var exchBuf [RackTileLimit]tilemapping.MachineLetter
+		exchanged = m.ExchangeTiles(exchBuf[:0])
+		if len(exchanged) > g.bag.TilesRemaining() {
+			return nil, fmt.Errorf("cannot exchange %d tile(s) with only %d in the bag",
+				len(exchanged), g.bag.TilesRemaining())
+		}
+		var err error
+		leave, err = tilemapping.Leave(g.players[g.onturn].rack.TilesOn(), exchanged, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	backedUp := false
+	playSucceeded := false
 	if g.backupMode != NoBackup {
 		g.backupState()
+		backedUp = true
+		defer func() {
+			if backedUp && !playSucceeded {
+				g.restoreLastBackup()
+			}
+		}()
 	}
 	if m.IsPass() {
 		if g.playing == pb.PlayState_GAME_OVER {
@@ -770,13 +825,7 @@ func (g *Game) PlaySmallMoveWithDraw(m *tinymove.SmallMove) (
 		g.scorelessTurns++
 		g.players[g.onturn].turns += 1
 	} else if m.IsExchange() {
-		var exchBuf [RackTileLimit]tilemapping.MachineLetter
-		exchanged := m.ExchangeTiles(exchBuf[:0])
-		leave, err := tilemapping.Leave(g.players[g.onturn].rack.TilesOn(), exchanged, false)
-		if err != nil {
-			return nil, err
-		}
-		err = g.bag.Exchange(exchanged, g.players[g.onturn].placeholderRack)
+		err := g.bag.Exchange(exchanged, g.players[g.onturn].placeholderRack)
 		if err != nil {
 			return nil, err
 		}
@@ -821,6 +870,7 @@ func (g *Game) PlaySmallMoveWithDraw(m *tinymove.SmallMove) (
 	}
 
 	g.turnnum++
+	playSucceeded = true
 
 	return &g.stripBackup, nil
 }
@@ -1156,7 +1206,7 @@ func (g *Game) PlayTurn(t int) error {
 		}
 		err = g.bag.Exchange([]tilemapping.MachineLetter(m.Tiles()), g.players[g.onturn].placeholderRack)
 		if err != nil {
-			panic(err)
+			return err
 		}
 		copy(g.players[g.onturn].placeholderRack[len(m.Tiles()):], []tilemapping.MachineLetter(m.Leave()))
 		g.players[g.onturn].setRackTiles(g.players[g.onturn].placeholderRack[:len(m.Tiles())+len(m.Leave())], g.alph)

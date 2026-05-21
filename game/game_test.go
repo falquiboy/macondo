@@ -112,6 +112,56 @@ func TestPlaySmallExchangeWithDraw(t *testing.T) {
 	is.Equal(g.PlayerOnTurn(), 0)
 }
 
+func TestRejectedExchangeDoesNotLeakBackup(t *testing.T) {
+	is := is.New(t)
+	players := []*pb.PlayerInfo{
+		{Nickname: "JD", RealName: "Jesse"},
+		{Nickname: "cesar", RealName: "César"},
+	}
+	rules, err := NewBasicGameRules(
+		DefaultConfig, "", board.CrosswordGameLayout, "english",
+		CrossScoreOnly, "")
+	is.NoErr(err)
+	g, err := NewGame(rules, players)
+	is.NoErr(err)
+	g.StartGame()
+	g.SetStateStackLength(2)
+	g.SetBackupMode(SimulationMode)
+	g.SetPlayerOnTurn(0)
+	alph := g.Alphabet()
+	err = g.SetRackFor(0, tilemapping.RackFromString("ABCDEF?", alph))
+	is.NoErr(err)
+
+	drawn := make([]tilemapping.MachineLetter, g.Bag().TilesRemaining()-1)
+	err = g.Bag().Draw(len(drawn), drawn)
+	is.NoErr(err)
+	is.Equal(g.Bag().TilesRemaining(), 1)
+
+	beforeStack := g.stackPtr
+	beforeTurn := g.PlayerOnTurn()
+	beforeRack := g.RackFor(0).String()
+	beforeBag := g.Bag().TilesRemaining()
+
+	sm := tinymove.ExchangeMove([]tilemapping.MachineLetter{1, 2})
+	_, err = g.PlaySmallMoveWithDraw(&sm)
+	is.True(err != nil)
+	is.Equal(g.stackPtr, beforeStack)
+	is.Equal(g.PlayerOnTurn(), beforeTurn)
+	is.Equal(g.RackFor(0).String(), beforeRack)
+	is.Equal(g.Bag().TilesRemaining(), beforeBag)
+
+	m := move.NewExchangeMove(
+		[]tilemapping.MachineLetter{1, 2},
+		[]tilemapping.MachineLetter{0, 3, 4, 5, 6},
+		alph)
+	err = g.PlayMove(m, false, 0)
+	is.True(err != nil)
+	is.Equal(g.stackPtr, beforeStack)
+	is.Equal(g.PlayerOnTurn(), beforeTurn)
+	is.Equal(g.RackFor(0).String(), beforeRack)
+	is.Equal(g.Bag().TilesRemaining(), beforeBag)
+}
+
 func TestValidate(t *testing.T) {
 	is := is.New(t)
 	players := []*pb.PlayerInfo{
