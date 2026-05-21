@@ -662,7 +662,22 @@ func smallMoveStr(sm tinymove.SmallMove) string {
 }
 
 func (s *Solver) configurePEGMovegen(mg movegen.MoveGenerator, g *game.Game) bool {
-	maxCanExchange := game.MaxCanExchange(g.Bag().TilesRemaining(), g.ExchangeLimit())
+	// Cap exchanges to what the bag will actually hold once the opponent
+	// has a full rack drawn from it. Without this cap the top-level move
+	// generator can emit exchanges larger than the post-opp-fill bag,
+	// which PlayMove rejects mid-flight in processJobPerPlay — after
+	// backupState has already pushed onto the state stack, leaving a leak
+	// that eventually panics with "index out of range" when the stack
+	// fills.
+	oppMissing := game.RackTileLimit - int(g.RackFor(1-g.PlayerOnTurn()).NumTiles())
+	if oppMissing < 0 {
+		oppMissing = 0
+	}
+	effectiveBag := g.Bag().TilesRemaining() - oppMissing
+	if effectiveBag < 0 {
+		effectiveBag = 0
+	}
+	maxCanExchange := game.MaxCanExchange(effectiveBag, g.ExchangeLimit())
 	mg.SetMaxCanExchange(maxCanExchange)
 	return maxCanExchange > 0
 }

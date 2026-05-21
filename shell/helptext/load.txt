@@ -30,6 +30,14 @@ If you would like to load a CGP file, use it as follows:
 (See https://github.com/domino14/macondo/tree/master/cgp#readme for an explanation
 of the CGP file format).
 
+To load a CGP from a file (recommended for CGPs that contain `[` brackets
+like Spanish digraph tags `[CH]`, `[LL]`, `[RR]`; on some terminals pasting
+or AltGr-typing `[` is silently collapsed by the readline escape-sequence
+handler, mangling the input before it reaches the parser):
+
+    load cgpfile path/to/position.cgp
+    load cgp_file path/to/position.cgp
+
 This command will load a game into memory. You can then step through the
 game with the `n`, `b`, and `turn` commands, generate plays, simulate,
 solve endgames, and more.

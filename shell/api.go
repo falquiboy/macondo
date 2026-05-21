@@ -247,6 +247,27 @@ func (sc *ShellController) load(cmd *shellcmd) (*Response, error) {
 		}
 		sc.gameSource = "" // CGP positions have no persistent identifier
 
+	} else if cmd.args[0] == "cgpfile" || cmd.args[0] == "cgp_file" {
+		// Load a CGP string from a file. Useful when the CGP contains
+		// characters the interactive shell's readline misinterprets — for
+		// example on Windows, chzyer/readline collapses `[X` into `X` for
+		// `X ∈ {C,L,R}` because the unprefixed `[` is treated as the start
+		// of a CSI escape sequence. That corrupts Spanish digraph tags
+		// `[CH]`, `[LL]`, `[RR]` when pasted or typed via AltGr.
+		if len(cmd.args) < 2 {
+			return nil, errors.New("need to provide a path to the cgp file")
+		}
+		path := strings.Join(cmd.args[1:], " ")
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		cgpStr := strings.TrimSpace(string(contents))
+		if err := sc.loadCGP(cgpStr); err != nil {
+			return nil, err
+		}
+		sc.gameSource = ""
+
 	} else {
 		err := sc.loadGCG(cmd.args)
 		if err != nil {
