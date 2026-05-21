@@ -1930,6 +1930,8 @@ func (s *Solver) QuickAndDirtySolve(ctx context.Context, plies, thread int) (int
 	if s.game.Bag().TilesRemaining() > 0 {
 		return 0, nil, errors.New("bag is not empty; cannot use endgame solver")
 	}
+	s.game.SetEndgameMode(true)
+	defer s.game.SetEndgameMode(false)
 	// log.Debug().
 	// 	Int("thread", thread).
 	// 	Str("ourRack", s.game.RackLettersFor(s.solvingPlayer)).

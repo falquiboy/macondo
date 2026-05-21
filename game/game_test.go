@@ -16,6 +16,7 @@ import (
 	pb "github.com/domino14/macondo/gen/api/proto/macondo"
 	"github.com/domino14/macondo/move"
 	"github.com/domino14/macondo/testhelpers"
+	"github.com/domino14/macondo/tinymove"
 )
 
 var DefaultConfig = config.DefaultConfig()
@@ -72,6 +73,43 @@ func TestBackup(t *testing.T) {
 	is.Equal(game.players[1].points, 0)
 	is.Equal(game.bag.TilesRemaining(), 86)
 	is.Equal(game.players[0].rackLetters(), "?ACEOTV")
+}
+
+func TestPlaySmallExchangeWithDraw(t *testing.T) {
+	is := is.New(t)
+	players := []*pb.PlayerInfo{
+		{Nickname: "JD", RealName: "Jesse"},
+		{Nickname: "cesar", RealName: "César"},
+	}
+	rules, err := NewBasicGameRules(
+		DefaultConfig, "", board.CrosswordGameLayout, "english",
+		CrossScoreOnly, "")
+	is.NoErr(err)
+	g, err := NewGame(rules, players)
+	is.NoErr(err)
+	g.StartGame()
+	g.SetStateStackLength(2)
+	g.SetBackupMode(SimulationMode)
+	g.SetPlayerOnTurn(0)
+	alph := g.Alphabet()
+	err = g.SetRackFor(0, tilemapping.RackFromString("ABCDEF?", alph))
+	is.NoErr(err)
+
+	beforeBag := g.Bag().TilesRemaining()
+	sm := tinymove.ExchangeMove([]tilemapping.MachineLetter{1, 0})
+	_, err = g.PlaySmallMoveWithDraw(&sm)
+	is.NoErr(err)
+
+	is.Equal(g.Bag().TilesRemaining(), beforeBag)
+	is.Equal(g.RackFor(0).NumTiles(), uint8(7))
+	is.Equal(g.ScorelessTurns(), 1)
+	is.Equal(g.PlayerOnTurn(), 1)
+
+	g.UnplayLastMove()
+	is.Equal(g.Bag().TilesRemaining(), beforeBag)
+	is.Equal(g.RackFor(0).String(), "?ABCDEF")
+	is.Equal(g.ScorelessTurns(), 0)
+	is.Equal(g.PlayerOnTurn(), 0)
 }
 
 func TestValidate(t *testing.T) {

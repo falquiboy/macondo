@@ -709,6 +709,8 @@ func (g *Game) playSmallMove(m *tinymove.SmallMove, updateCrossSets bool) (
 		g.lastScorelessTurns = g.scorelessTurns
 		g.scorelessTurns++
 		g.players[g.onturn].turns += 1
+	} else if m.IsExchange() {
+		return nil, errors.New("PlaySmallMove cannot play exchanges without drawing")
 	} else {
 		// It's a tile-play move.
 		g.board.PlaySmallMove(m, &g.stripBackup, g.players[g.onturn].rack)
@@ -753,7 +755,7 @@ func (g *Game) playSmallMove(m *tinymove.SmallMove, updateCrossSets bool) (
 // PlaySmallMoveWithDraw plays a SmallMove and draws replacement tiles from the
 // bag into the rack. After board.PlaySmallMove the rack already holds the leave
 // (played tiles were removed via rack.Take); we draw up to TilesPlayed() new
-// tiles and add them with rack.Add — zero heap allocations.
+// tiles and add them with rack.Add.
 func (g *Game) PlaySmallMoveWithDraw(m *tinymove.SmallMove) (
 	*[board.MaxBoardDim]tilemapping.MachineLetter, error) {
 
@@ -764,6 +766,23 @@ func (g *Game) PlaySmallMoveWithDraw(m *tinymove.SmallMove) (
 		if g.playing == pb.PlayState_GAME_OVER {
 			log.Warn().Msg("adding a pass when game is already over")
 		}
+		g.lastScorelessTurns = g.scorelessTurns
+		g.scorelessTurns++
+		g.players[g.onturn].turns += 1
+	} else if m.IsExchange() {
+		var exchBuf [RackTileLimit]tilemapping.MachineLetter
+		exchanged := m.ExchangeTiles(exchBuf[:0])
+		leave, err := tilemapping.Leave(g.players[g.onturn].rack.TilesOn(), exchanged, false)
+		if err != nil {
+			return nil, err
+		}
+		err = g.bag.Exchange(exchanged, g.players[g.onturn].placeholderRack)
+		if err != nil {
+			return nil, err
+		}
+		copy(g.players[g.onturn].placeholderRack[len(exchanged):], []tilemapping.MachineLetter(leave))
+		g.players[g.onturn].setRackTiles(
+			g.players[g.onturn].placeholderRack[:len(exchanged)+len(leave)], g.alph)
 		g.lastScorelessTurns = g.scorelessTurns
 		g.scorelessTurns++
 		g.players[g.onturn].turns += 1

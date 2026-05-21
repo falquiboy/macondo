@@ -32,10 +32,10 @@ import (
 // nestedOurTurnSolve is entered. The result is a pure function of this state
 // (given fixed solver config), so we can memoize it.
 type nestedCacheKey struct {
-	board          uint64                               // board-only Zobrist hash
-	ourRack        [zobrist.MaxLetters]uint8            // Rack.LetArr narrowed to uint8
-	unseen         [tilemapping.MaxAlphabetSize]uint8   // bag.Peek() ∪ opp.rack multiset
-	scorelessTurns uint8                                // 0 or 1 in practice (2 ends the game)
+	board          uint64                             // board-only Zobrist hash
+	ourRack        [zobrist.MaxLetters]uint8          // Rack.LetArr narrowed to uint8
+	unseen         [tilemapping.MaxAlphabetSize]uint8 // bag.Peek() ∪ opp.rack multiset
+	scorelessTurns uint8                              // needed for pass/exchange termination
 }
 
 // nestedCache is a shared, thread-safe memo table for nestedOurTurnSolve
@@ -219,69 +219,69 @@ func (s *Solver) multithreadSolveGeneric(ctx context.Context, moves []*move.Move
 					cr = float64(ch) / float64(ch+cm)
 				}
 				nestedByBagSize := make(map[int]uint64)
-					for i := 1; i <= InBagMaxLimit; i++ {
-						if n := s.numNestedByBagSize[i].Load(); n > 0 {
-							nestedByBagSize[i] = n
-						}
+				for i := 1; i <= InBagMaxLimit; i++ {
+					if n := s.numNestedByBagSize[i].Load(); n > 0 {
+						nestedByBagSize[i] = n
 					}
-					now := time.Now()
-					s.inFlightMu.RLock()
-					type permSnapshot struct {
-						Play           string  `json:"play"`
-						PermInBag      string  `json:"perm_in_bag"`
-						OppRack        string  `json:"opp_rack"`
-						OurRack        string  `json:"our_rack"`
-						ElapsedS       float64 `json:"elapsed_s"`
-						EndgamesOnPerm uint64  `json:"endgames_on_perm"`
-						NestedBagSize  int32   `json:"nested_bag_size,omitempty"`
+				}
+				now := time.Now()
+				s.inFlightMu.RLock()
+				type permSnapshot struct {
+					Play           string  `json:"play"`
+					PermInBag      string  `json:"perm_in_bag"`
+					OppRack        string  `json:"opp_rack"`
+					OurRack        string  `json:"our_rack"`
+					ElapsedS       float64 `json:"elapsed_s"`
+					EndgamesOnPerm uint64  `json:"endgames_on_perm"`
+					NestedBagSize  int32   `json:"nested_bag_size,omitempty"`
+				}
+				curEndgames := s.numEndgamesSolved.Load()
+				inFlight := make([]permSnapshot, 0, s.threads)
+				for t := 0; t < s.threads; t++ {
+					p := s.inFlightPerms[t]
+					if len(p.permInBag) == 0 {
+						continue
 					}
-					curEndgames := s.numEndgamesSolved.Load()
-					inFlight := make([]permSnapshot, 0, s.threads)
-					for t := 0; t < s.threads; t++ {
-						p := s.inFlightPerms[t]
-						if len(p.permInBag) == 0 {
-							continue
-						}
-						threadNow := s.threadEndgamesSolved[t].Load()
-						var permEndgames uint64
-						if threadNow >= p.endgamesAtStart {
-							permEndgames = threadNow - p.endgamesAtStart
-						}
-						// Compute display strings lazily here in the ticker (every 60s),
-						// not in the hot per-perm path.
-						inFlight = append(inFlight, permSnapshot{
-							Play:           p.play,
-							PermInBag:      tilemapping.MachineWord(p.permInBag).UserVisible(p.alphabet),
-							OppRack:        tilemapping.MachineWord(p.oppRack[:p.oppRackLen]).UserVisible(p.alphabet),
-							OurRack:        tilemapping.MachineWord(p.ourRack[:p.ourRackLen]).UserVisible(p.alphabet),
-							ElapsedS:       now.Sub(p.startedAt).Seconds(),
-							EndgamesOnPerm: permEndgames,
-							NestedBagSize:  s.threadNestedBagSize[t].Load(),
-						})
+					threadNow := s.threadEndgamesSolved[t].Load()
+					var permEndgames uint64
+					if threadNow >= p.endgamesAtStart {
+						permEndgames = threadNow - p.endgamesAtStart
 					}
-					s.inFlightMu.RUnlock()
-					total := s.totalPerms.Load()
-					done := processed.Load()
-					remaining := uint32(0)
-					if total > done {
-						remaining = total - done
-					}
-					log.Info().
-						Uint32("processed", done).
-						Uint32("total", total).
-						Uint32("remaining", remaining).
-						Uint64("endgames-solved", curEndgames).
-						Uint64("cutoffs", s.numCutoffs.Load()).
-						Uint64("nested-calls", s.numNestedCalls.Load()).
-						Uint64("max-nested-depth", s.maxNestedDepth.Load()).
-						Uint64("sub-perms-evaluated", s.numSubPermsEvaluated.Load()).
-						Uint64("nested-cache-hits", ch).
-						Uint64("nested-cache-misses", cm).
-						Float64("nested-cache-hit-rate", cr).
-						Int("nested-cache-size", s.nestedCache.size()).
-						Interface("nested-calls-by-bag-size", nestedByBagSize).
-						Interface("in-flight", inFlight).
-						Msg("peg-status")
+					// Compute display strings lazily here in the ticker (every 60s),
+					// not in the hot per-perm path.
+					inFlight = append(inFlight, permSnapshot{
+						Play:           p.play,
+						PermInBag:      tilemapping.MachineWord(p.permInBag).UserVisible(p.alphabet),
+						OppRack:        tilemapping.MachineWord(p.oppRack[:p.oppRackLen]).UserVisible(p.alphabet),
+						OurRack:        tilemapping.MachineWord(p.ourRack[:p.ourRackLen]).UserVisible(p.alphabet),
+						ElapsedS:       now.Sub(p.startedAt).Seconds(),
+						EndgamesOnPerm: permEndgames,
+						NestedBagSize:  s.threadNestedBagSize[t].Load(),
+					})
+				}
+				s.inFlightMu.RUnlock()
+				total := s.totalPerms.Load()
+				done := processed.Load()
+				remaining := uint32(0)
+				if total > done {
+					remaining = total - done
+				}
+				log.Info().
+					Uint32("processed", done).
+					Uint32("total", total).
+					Uint32("remaining", remaining).
+					Uint64("endgames-solved", curEndgames).
+					Uint64("cutoffs", s.numCutoffs.Load()).
+					Uint64("nested-calls", s.numNestedCalls.Load()).
+					Uint64("max-nested-depth", s.maxNestedDepth.Load()).
+					Uint64("sub-perms-evaluated", s.numSubPermsEvaluated.Load()).
+					Uint64("nested-cache-hits", ch).
+					Uint64("nested-cache-misses", cm).
+					Float64("nested-cache-hit-rate", cr).
+					Int("nested-cache-size", s.nestedCache.size()).
+					Interface("nested-calls-by-bag-size", nestedByBagSize).
+					Interface("in-flight", inFlight).
+					Msg("peg-status")
 			}
 		}
 	}()
@@ -292,11 +292,7 @@ func (s *Solver) multithreadSolveGeneric(ctx context.Context, moves []*move.Move
 	// The determiner of the winner.
 	winnerGroup.Go(func() error {
 		for p := range winnerChan {
-			if s.winnerSoFar != nil {
-				if p.Points > s.winnerSoFar.Points {
-					s.winnerSoFar = p
-				}
-			} else {
+			if betterPreEndgamePlay(p, s.winnerSoFar) {
 				s.winnerSoFar = p
 			}
 			// e.g. if we have three known losses in 4 games, we have at most 7 possible losses.
@@ -335,7 +331,7 @@ func (s *Solver) multithreadSolveGeneric(ctx context.Context, moves []*move.Move
 
 	// sort plays by win %
 	sort.Slice(s.plays, func(i, j int) bool {
-		return s.plays[i].Points > s.plays[j].Points
+		return betterPreEndgamePlay(s.plays[i], s.plays[j])
 	})
 
 	if !s.skipTiebreaker {
@@ -395,7 +391,8 @@ func (s *Solver) computeSortedOptions(maybeInBagTiles []int) [][]option {
 			MoveTilesToBeginning(tiles, g0.Bag())
 			if _, err := g0.SetRandomRack(1-g0.PlayerOnTurn(), nil); err == nil {
 				if err := g0.PlayMove(p.Play, false, 0); err == nil {
-					mg0.GenAll(g0.RackFor(g0.PlayerOnTurn()), false)
+					addExchange := s.configurePEGMovegen(mg0, g0)
+					mg0.GenAll(g0.RackFor(g0.PlayerOnTurn()), addExchange)
 					if len(mg0.Plays()) > 0 {
 						opt.oppEstimate = float64(mg0.Plays()[0].Equity())
 					}
@@ -451,7 +448,7 @@ func (s *Solver) createGenericPEGJobs(ctx context.Context, maybeInBagTiles []int
 func (s *Solver) maybeTiebreak(ctx context.Context, maybeInBagTiles []int) error {
 	i := 0
 	for {
-		if i+1 >= len(s.plays) || s.plays[i].Points != s.plays[i+1].Points {
+		if i+1 >= len(s.plays) || math.Abs(float64(s.plays[i].PointRate()-s.plays[i+1].PointRate())) > 1e-6 {
 			break
 		}
 		i++
@@ -654,11 +651,67 @@ func smallMoveStr(sm tinymove.SmallMove) string {
 	if sm.IsPass() {
 		return "PASS"
 	}
+	if sm.IsExchange() {
+		return fmt.Sprintf("EXCH tiles=%d", sm.TilesPlayed())
+	}
 	row, col, vert := sm.CoordsAndVertical()
 	if vert {
 		return fmt.Sprintf("%c%d score=%d", 'A'+col, row+1, sm.Score())
 	}
 	return fmt.Sprintf("%d%c score=%d", row+1, 'A'+col, sm.Score())
+}
+
+func (s *Solver) configurePEGMovegen(mg movegen.MoveGenerator, g *game.Game) bool {
+	maxCanExchange := game.MaxCanExchange(g.Bag().TilesRemaining(), g.ExchangeLimit())
+	mg.SetMaxCanExchange(maxCanExchange)
+	return maxCanExchange > 0
+}
+
+func moveLeavesTilesInBag(m *move.Move, inbag int) int {
+	if m.Action() != move.MoveTypePlay {
+		return inbag
+	}
+	return max(0, inbag-m.TilesPlayed())
+}
+
+func moveEmptiesBag(m *move.Move, inbag int) bool {
+	return moveLeavesTilesInBag(m, inbag) == 0
+}
+
+func (s *Solver) skipMoveForMaxTilesLeft(m *move.Move, tilesLeftAfterMove int) bool {
+	if len(s.solveOnlyMoves) != 0 {
+		return false
+	}
+	if m.Action() == move.MoveTypeExchange {
+		return false
+	}
+	return s.maxTilesLeft >= 0 && tilesLeftAfterMove > s.maxTilesLeft
+}
+
+func smallMoveLeavesTilesInBag(m tinymove.SmallMove, inbag int) int {
+	if !m.IsTilePlay() {
+		return inbag
+	}
+	return max(0, inbag-m.TilesPlayed())
+}
+
+func smallMoveEmptiesBag(m tinymove.SmallMove, inbag int) bool {
+	return smallMoveLeavesTilesInBag(m, inbag) == 0
+}
+
+func pegBranchKey(prefix, suffix []tilemapping.MachineLetter) []tilemapping.MachineLetter {
+	key := make([]tilemapping.MachineLetter, 0, len(prefix)+len(suffix))
+	key = append(key, prefix...)
+	key = append(key, suffix...)
+	return key
+}
+
+func permutationTiles(perm Permutation) []tilemapping.MachineLetter {
+	tiles := make([]tilemapping.MachineLetter, len(perm.Perm))
+	for i, el := range perm.Perm {
+		tiles[i] = tilemapping.MachineLetter(el)
+	}
+	return tiles
 }
 
 func (s *Solver) handleJobGeneric(ctx context.Context, j job, thread int,
@@ -725,15 +778,15 @@ func (s *Solver) processJobPerPerm(ctx context.Context, j job, thread int,
 	g := s.endgameSolvers[thread].Game()
 	mg := s.endgameSolvers[thread].Movegen()
 
-	firstPlayEmptiesBag := j.ourMove.Play.TilesPlayed() >= s.numinbag
+	firstPlayEmptiesBag := moveEmptiesBag(j.ourMove.Play, s.numinbag)
 	if s.logStream != nil {
 		s.threadLogs[thread].Options = make([]jobOptionLog, 1)
 		s.threadLogs[thread].PEGPlayEmptiesBag = firstPlayEmptiesBag
 		s.threadLogs[thread].EndgamePlies = s.curEndgamePlies
 	}
 
-	tilesLeftAfterPlay := s.numinbag - j.ourMove.Play.TilesPlayed()
-	if s.maxTilesLeft >= 0 && tilesLeftAfterPlay > s.maxTilesLeft && len(s.solveOnlyMoves) == 0 {
+	tilesLeftAfterPlay := moveLeavesTilesInBag(j.ourMove.Play, s.numinbag)
+	if s.skipMoveForMaxTilesLeft(j.ourMove.Play, tilesLeftAfterPlay) {
 		return nil
 	}
 
@@ -760,14 +813,7 @@ func (s *Solver) processJobPerPerm(ctx context.Context, j job, thread int,
 			j.opt.ct)
 	}
 
-	var sm tinymove.SmallMove
-	if j.ourMove.Play.Action() == move.MoveTypePass {
-		sm = tinymove.PassMove()
-	} else {
-		tm := conversions.MoveToTinyMove(j.ourMove.Play)
-		sm = tinymove.TilePlayMove(tm, int16(j.ourMove.Play.Score()),
-			uint8(j.ourMove.Play.TilesPlayed()), uint8(j.ourMove.Play.PlayLength()))
-	}
+	sm := conversions.MoveToSmallMove(j.ourMove.Play)
 	if s.logStream != nil {
 		s.threadLogs[thread].Options[0].PermutationCount = j.opt.ct
 		s.threadLogs[thread].Options[0].PermutationInBag = tilemapping.MachineWord(j.opt.mls).UserVisible(g.Alphabet())
@@ -799,14 +845,14 @@ func (s *Solver) processJobPerPlay(ctx context.Context, j job, thread int,
 	options := []option{}
 	mg.(*movegen.GordonGenerator).SetPlayRecorderTopPlay()
 	permutations := generatePermutations(j.maybeInBagTiles, s.numinbag)
-	firstPlayEmptiesBag := j.ourMove.Play.TilesPlayed() >= s.numinbag
-	tilesLeftAfterPlay := s.numinbag - j.ourMove.Play.TilesPlayed()
+	firstPlayEmptiesBag := moveEmptiesBag(j.ourMove.Play, s.numinbag)
+	tilesLeftAfterPlay := moveLeavesTilesInBag(j.ourMove.Play, s.numinbag)
 	if s.logStream != nil {
 		s.threadLogs[thread].Options = make([]jobOptionLog, len(permutations))
 		s.threadLogs[thread].PEGPlayEmptiesBag = firstPlayEmptiesBag
 		s.threadLogs[thread].EndgamePlies = s.curEndgamePlies
 	}
-	if s.maxTilesLeft >= 0 && tilesLeftAfterPlay > s.maxTilesLeft && len(s.solveOnlyMoves) == 0 {
+	if s.skipMoveForMaxTilesLeft(j.ourMove.Play, tilesLeftAfterPlay) {
 		return nil
 	}
 	for _, perm := range permutations {
@@ -820,7 +866,8 @@ func (s *Solver) processJobPerPlay(ctx context.Context, j job, thread int,
 			MoveTilesToBeginning(tiles, g.Bag())
 			if _, err := g.SetRandomRack(1-g.PlayerOnTurn(), nil); err == nil {
 				if err := g.PlayMove(j.ourMove.Play, false, 0); err == nil {
-					mg.GenAll(g.RackFor(g.PlayerOnTurn()), false)
+					addExchange := s.configurePEGMovegen(mg, g)
+					mg.GenAll(g.RackFor(g.PlayerOnTurn()), addExchange)
 					if len(mg.Plays()) > 0 {
 						topEquity = mg.Plays()[0].Equity()
 					}
@@ -882,14 +929,7 @@ func (s *Solver) processJobPerPlay(ctx context.Context, j job, thread int,
 				options[idx].ct)
 		}
 
-		var sm tinymove.SmallMove
-		if j.ourMove.Play.Action() == move.MoveTypePass {
-			sm = tinymove.PassMove()
-		} else {
-			tm := conversions.MoveToTinyMove(j.ourMove.Play)
-			sm = tinymove.TilePlayMove(tm, int16(j.ourMove.Play.Score()),
-				uint8(j.ourMove.Play.TilesPlayed()), uint8(j.ourMove.Play.PlayLength()))
-		}
+		sm := conversions.MoveToSmallMove(j.ourMove.Play)
 		if s.logStream != nil {
 			s.threadLogs[thread].Options[idx].PermutationCount = options[idx].ct
 			s.threadLogs[thread].Options[idx].PermutationInBag = tilemapping.MachineWord(options[idx].mls).UserVisible(g.Alphabet())
@@ -1069,6 +1109,11 @@ func (s *Solver) recursiveSolve(ctx context.Context, thread int, pegPlay *PreEnd
 	}
 
 	// If the bag is not empty, we must recursively play until it is empty.
+	if moveToMake.IsExchange() {
+		return s.recursiveSolveExchange(ctx, thread, pegPlay, moveToMake, inbagOption,
+			winnerChan, depth, pegPlayEmptiesBag, fullSolve, nestedDepth)
+	}
+
 	// Use PlaySmallMoveWithDraw to avoid converting SmallMove→Move (saves allocs).
 	_, err := g.PlaySmallMoveWithDraw(&moveToMake)
 	if err != nil {
@@ -1094,32 +1139,88 @@ func (s *Solver) recursiveSolve(ctx context.Context, thread int, pegPlay *PreEnd
 			g.ScorelessTurns())
 	}
 
-	// If the bag is STILL not empty after making our last move:
-	if g.Bag().TilesRemaining() > 0 && g.Playing() != macondo.PlayState_GAME_OVER {
-		if g.PlayerOnTurn() == s.solvingForPlayer {
-			// Our turn: run a nested PEG to find if any reply guarantees a win
-			// across all bag orderings we might face.
-			err = s.iterateOurReplies(ctx, thread, pegPlay, inbagOption, pegPlayEmptiesBag, nestedDepth)
-		} else {
-			// Opp's turn: enumerate all replies exhaustively (pessimistic).
-			genPlays := s.allocSortedReplies(thread, moveToMake)
-			defer s.arenas[thread].Dealloc(len(genPlays))
-			err = s.iterateOppReplies(ctx, thread, pegPlay, inbagOption, winnerChan, depth, pegPlayEmptiesBag, fullSolve, genPlays, nestedDepth)
-		}
-		if err != nil {
-			g.UnplayLastMove()
-			return err
-		}
-	} else {
-		// bag is empty or game is over; recurse once more to hit the base case.
-		err = s.recursiveSolve(ctx, thread, pegPlay, tinymove.DefaultSmallMove, inbagOption, winnerChan, depth+1, pegPlayEmptiesBag, fullSolve, nestedDepth)
-		if err != nil {
-			log.Err(err).Msg("bag-empty-recursive-solve-err")
-		}
-	}
+	err = s.continueAfterPEGMove(ctx, thread, pegPlay, moveToMake, inbagOption,
+		winnerChan, depth, pegPlayEmptiesBag, fullSolve, nestedDepth)
 
 	g.UnplayLastMove()
 	return err
+}
+
+func (s *Solver) continueAfterPEGMove(ctx context.Context, thread int, pegPlay *PreEndgamePlay,
+	lastMove tinymove.SmallMove, inbagOption option, winnerChan chan *PreEndgamePlay, depth int,
+	pegPlayEmptiesBag, fullSolve bool, nestedDepth int) error {
+
+	g := s.endgameSolvers[thread].Game()
+	if g.Bag().TilesRemaining() > 0 && g.Playing() != macondo.PlayState_GAME_OVER {
+		if g.PlayerOnTurn() == s.solvingForPlayer {
+			return s.iterateOurReplies(ctx, thread, pegPlay, inbagOption, pegPlayEmptiesBag, nestedDepth)
+		}
+		genPlays := s.allocSortedReplies(thread, lastMove)
+		defer s.arenas[thread].Dealloc(len(genPlays))
+		return s.iterateOppReplies(ctx, thread, pegPlay, inbagOption, winnerChan, depth,
+			pegPlayEmptiesBag, fullSolve, genPlays, nestedDepth)
+	}
+
+	err := s.recursiveSolve(ctx, thread, pegPlay, tinymove.DefaultSmallMove,
+		inbagOption, winnerChan, depth+1, pegPlayEmptiesBag, fullSolve, nestedDepth)
+	if err != nil {
+		log.Err(err).Msg("bag-empty-recursive-solve-err")
+	}
+	return err
+}
+
+func (s *Solver) recursiveSolveExchange(ctx context.Context, thread int, pegPlay *PreEndgamePlay,
+	moveToMake tinymove.SmallMove, inbagOption option, winnerChan chan *PreEndgamePlay, depth int,
+	pegPlayEmptiesBag, fullSolve bool, nestedDepth int) error {
+
+	g := s.endgameSolvers[thread].Game()
+	var exchBuf [game.RackTileLimit]tilemapping.MachineLetter
+	exchanged := moveToMake.ExchangeTiles(exchBuf[:0])
+	if len(exchanged) == 0 {
+		return nil
+	}
+	bagBefore := g.Bag().Peek()
+	if len(exchanged) > len(bagBefore) {
+		return fmt.Errorf("cannot exchange %d tile(s) with %d in the bag", len(exchanged), len(bagBefore))
+	}
+
+	postExchangeBagCounts := make([]int, tilemapping.MaxAlphabetSize)
+	for _, t := range bagBefore[:len(bagBefore)-len(exchanged)] {
+		postExchangeBagCounts[int(t)]++
+	}
+	for _, t := range exchanged {
+		postExchangeBagCounts[int(t)]++
+	}
+	postExchangePerms := generatePermutations(postExchangeBagCounts, len(bagBefore))
+
+	for pi, postPerm := range postExchangePerms {
+		postTiles := permutationTiles(postPerm)
+		branchOption := inbagOption
+		branchOption.ct = inbagOption.ct * postPerm.Count
+		branchOption.mls = pegBranchKey(inbagOption.mls, postTiles)
+
+		if _, err := g.PlaySmallMoveWithDraw(&moveToMake); err != nil {
+			return err
+		}
+		MoveTilesToBeginning(postTiles, g.Bag())
+
+		if s.traceWriter != nil {
+			s.trace(depth+nestedDepth*4, "[d=%d n=%d] exchange branch %d/%d post-bag=%s our=%s opp=%s scoreless=%d",
+				depth, nestedDepth, pi+1, len(postExchangePerms),
+				tilemapping.MachineWord(postTiles).UserVisible(g.Alphabet()),
+				g.RackLettersFor(s.solvingForPlayer),
+				g.RackLettersFor(1-s.solvingForPlayer),
+				g.ScorelessTurns())
+		}
+
+		err := s.continueAfterPEGMove(ctx, thread, pegPlay, moveToMake, branchOption,
+			winnerChan, depth, pegPlayEmptiesBag, fullSolve, nestedDepth)
+		g.UnplayLastMove()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // allocSortedReplies generates all legal replies for the player currently on turn,
@@ -1128,7 +1229,8 @@ func (s *Solver) recursiveSolve(ctx context.Context, thread int, pegPlay *PreEnd
 func (s *Solver) allocSortedReplies(thread int, prevMove tinymove.SmallMove) []tinymove.SmallMove {
 	g := s.endgameSolvers[thread].Game()
 	mg := s.endgameSolvers[thread].Movegen()
-	mg.GenAll(g.RackFor(g.PlayerOnTurn()), false)
+	addExchange := s.configurePEGMovegen(mg, g)
+	mg.GenAll(g.RackFor(g.PlayerOnTurn()), addExchange)
 	plays := mg.SmallPlays()
 	genPlays := s.arenas[thread].Alloc(len(plays))
 	copy(genPlays, plays)
@@ -1314,7 +1416,8 @@ func (s *Solver) nestedOurTurnSolve(ctx context.Context, thread int, nestedDepth
 			g.ThrowRacksInFor(opp)
 			MoveTilesToBeginning(tiles, g.Bag())
 			if _, err := g.SetRandomRack(opp, nil); err == nil {
-				mg.GenAll(g.RackFor(opp), false)
+				addExchange := s.configurePEGMovegen(mg, g)
+				mg.GenAll(g.RackFor(opp), addExchange)
 				if plays := mg.Plays(); len(plays) > 0 {
 					spe[i].est = plays[0].Equity()
 				}
@@ -1333,7 +1436,8 @@ func (s *Solver) nestedOurTurnSolve(ctx context.Context, thread int, nestedDepth
 		mg.SetGenPass(lastMoveWasPass)
 		defer mg.SetGenPass(true)
 	}
-	mg.GenAll(g.RackFor(g.PlayerOnTurn()), false)
+	addExchange := s.configurePEGMovegen(mg, g)
+	mg.GenAll(g.RackFor(g.PlayerOnTurn()), addExchange)
 	ourPlays := mg.SmallPlays()
 	subPlays := s.arenas[thread].Alloc(len(ourPlays))
 	copy(subPlays, ourPlays)
@@ -1385,7 +1489,7 @@ func (s *Solver) nestedOurTurnSolve(ctx context.Context, thread int, nestedDepth
 
 		subPegPlay := &PreEndgamePlay{Play: &move.Move{}}
 		allSubPegPlays[subMIdx] = subPegPlay
-		subEmptiesBag := int(subM.TilesPlayed()) >= subBagSize
+		subEmptiesBag := smallMoveEmptiesBag(subM, subBagSize)
 
 		for pi, subPerm := range subPerms {
 			tiles := make([]tilemapping.MachineLetter, len(subPerm.Perm))
@@ -1556,7 +1660,7 @@ func (s *Solver) nestedOurTurnSolve(ctx context.Context, thread int, nestedDepth
 						s.explainRerunDepth = nestedDepth
 						subOpt := option{mls: spTiles, ct: sp.Count, idx: pi}
 						bestSubM := subPlays[bestSubMIdx]
-						subEmptiesBag := int(bestSubM.TilesPlayed()) >= subBagSize
+						subEmptiesBag := smallMoveEmptiesBag(bestSubM, subBagSize)
 						g.ThrowRacksInFor(opp)
 						MoveTilesToBeginning(spTiles, g.Bag())
 						if _, err2 := g.SetRandomRack(opp, nil); err2 == nil {

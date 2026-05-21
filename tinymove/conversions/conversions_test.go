@@ -11,6 +11,7 @@ import (
 	"github.com/domino14/macondo/config"
 	"github.com/domino14/macondo/move"
 	"github.com/domino14/macondo/testhelpers"
+	"github.com/domino14/macondo/tinymove"
 )
 
 var DefaultConfig = config.DefaultConfig()
@@ -43,4 +44,19 @@ func TestComplexTinyMove(t *testing.T) {
 	m2 := &move.Move{}
 	TinyMoveToMove(tm, b, m2)
 	is.True(move.MinimallyEqual(m, m2))
+}
+
+func TestSmallExchangeMoveToMove(t *testing.T) {
+	is := is.New(t)
+	alph := testhelpers.EnglishAlphabet()
+	rack := tilemapping.RackFromString("ABCDEF?", alph)
+
+	sm := tinymove.ExchangeMove([]tilemapping.MachineLetter{1, 0, 3})
+	m := &move.Move{}
+	SmallMoveToMove(sm, m, alph, board.MakeBoard(board.CrosswordGameBoard), rack)
+
+	is.Equal(m.Action(), move.MoveTypeExchange)
+	is.Equal(m.TilesStringExchange(), "A?C")
+	is.Equal(m.LeaveString(), "BDEF")
+	is.Equal(m.TilesPlayed(), 3)
 }

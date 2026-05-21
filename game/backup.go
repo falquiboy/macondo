@@ -25,13 +25,14 @@ const (
 
 // stateBackup is a subset of Game, meant only for backup purposes.
 type stateBackup struct {
-	board          *board.GameBoard
-	bag            *tilemapping.Bag
-	playing        pb.PlayState
-	scorelessTurns int
-	onturn         int
-	turnnum        int
-	players        playerStates
+	board              *board.GameBoard
+	bag                *tilemapping.Bag
+	playing            pb.PlayState
+	scorelessTurns     int
+	lastScorelessTurns int
+	onturn             int
+	turnnum            int
+	players            playerStates
 }
 
 func (g *Game) SetBackupMode(m BackupMode) {
@@ -48,6 +49,7 @@ func (g *Game) backupState() {
 	st.bag.CopyFrom(g.bag)
 	st.playing = g.playing
 	st.scorelessTurns = g.scorelessTurns
+	st.lastScorelessTurns = g.lastScorelessTurns
 	st.players.copyFrom(g.players)
 	if g.backupMode == SimulationMode {
 		st.onturn = g.onturn
@@ -128,6 +130,7 @@ func (g *Game) UnplayLastMove() {
 	g.playing = b.playing
 	g.players.copyFrom(b.players)
 	g.scorelessTurns = b.scorelessTurns
+	g.lastScorelessTurns = b.lastScorelessTurns
 }
 
 // ResetToFirstState unplays all moves on the stack.
@@ -145,6 +148,7 @@ func (g *Game) ResetToFirstState() {
 	g.playing = b.playing
 	g.players.copyFrom(b.players)
 	g.scorelessTurns = b.scorelessTurns
+	g.lastScorelessTurns = b.lastScorelessTurns
 }
 
 // Copy creates a deep copy of Game for the most part. The lexicon and

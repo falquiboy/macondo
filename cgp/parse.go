@@ -63,6 +63,7 @@ func ParseCGP(cfg *config.Config, cgpstr string) (*ParsedCGP, error) {
 	// These are our defaults, but they can be overridden by operations.
 	boardLayoutName := "CrosswordGame"
 	letterDistributionName := "english"
+	letterDistributionSet := false
 	lexiconName := "NWL23"
 	maxScorelessTurns := game.DefaultMaxScorelessTurns
 	variant := game.VarClassic
@@ -93,6 +94,7 @@ func ParseCGP(cfg *config.Config, cgpstr string) (*ParsedCGP, error) {
 				return nil, errors.New("wrong number of arguments for ld operation")
 			}
 			letterDistributionName = opWithParams[1]
+			letterDistributionSet = true
 			opcodes["ld"] = opWithParams[1]
 
 		case "lex":
@@ -125,6 +127,13 @@ func ParseCGP(cfg *config.Config, cgpstr string) (*ParsedCGP, error) {
 
 		}
 
+	}
+
+	if !letterDistributionSet && lexiconName != "" {
+		inferredLD, err := tilemapping.ProbableLetterDistributionName(lexiconName)
+		if err == nil {
+			letterDistributionName = inferredLD
+		}
 	}
 
 	rules, err := game.NewBasicGameRules(cfg, lexiconName, boardLayoutName, letterDistributionName,

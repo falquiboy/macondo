@@ -2,6 +2,8 @@ package tinymove
 
 import (
 	"fmt"
+
+	"github.com/domino14/word-golib/tilemapping"
 )
 
 // A SmallMove consists of a TinyMove which encodes all the positional
@@ -12,6 +14,7 @@ type SmallMove struct {
 	tm             TinyMove
 	score          int16
 	estimatedValue int16
+	action         uint8
 	// tilesDescriptor:
 	// CCCC CPPP
 	// 7    3
@@ -25,6 +28,12 @@ var DefaultSmallMove = SmallMove{}
 
 const tilesPlayedBitMask = 0b00000111
 
+const (
+	SmallMoveTypePass uint8 = iota
+	SmallMoveTypePlay
+	SmallMoveTypeExchange
+)
+
 func PassMove() SmallMove {
 	// everything is 0.
 	return SmallMove{}
@@ -33,7 +42,29 @@ func PassMove() SmallMove {
 func TilePlayMove(tm TinyMove, score int16, tilesPlayed, playLength uint8) SmallMove {
 	tilesDescriptor := tilesPlayed + (playLength << 3)
 
-	return SmallMove{tm: tm, score: score, tilesDescriptor: tilesDescriptor}
+	return SmallMove{tm: tm, score: score, action: SmallMoveTypePlay, tilesDescriptor: tilesDescriptor}
+}
+
+func ExchangeMove(tiles []tilemapping.MachineLetter) SmallMove {
+	var moveCode uint64
+	var blanksMask int
+	bts := 20
+	for idx, tile := range tiles {
+		val := tile
+		if tile == 0 || tile.IsBlanked() {
+			blanksMask |= (1 << idx)
+			val = tile.Unblank()
+		}
+		moveCode |= (uint64(val) << bts)
+		bts += 6
+	}
+	tilesExchanged := uint8(len(tiles))
+	tilesDescriptor := tilesExchanged + (tilesExchanged << 3)
+	return SmallMove{
+		tm:              TinyMove(moveCode),
+		action:          SmallMoveTypeExchange,
+		tilesDescriptor: tilesDescriptor,
+	}
 }
 
 // EstimatedValue is an internal value that is used in calculating endgames and related metrics.
@@ -42,6 +73,9 @@ func (m *SmallMove) EstimatedValue() int16 {
 }
 
 func (m *SmallMove) ShortDescription() string {
+	if m.IsExchange() {
+		return fmt.Sprintf("<tinyexchange: %d ntiles: %d>", m.tm, m.TilesPlayed())
+	}
 	// depends on the board.
 	return fmt.Sprintf("<tinyplay: %d score: %d nracktiles: %d nplaytiles: %d>",
 		m.tm,
@@ -77,7 +111,32 @@ func (m *SmallMove) TinyMove() TinyMove {
 }
 
 func (m *SmallMove) IsPass() bool {
-	return m.tm == 0
+	return m.action == SmallMoveTypePass && m.tm == 0
+}
+
+func (m *SmallMove) IsExchange() bool {
+	return m.action == SmallMoveTypeExchange
+}
+
+func (m *SmallMove) IsTilePlay() bool {
+	return m.action == SmallMoveTypePlay
+}
+
+func (m *SmallMove) ExchangeTiles(dst []tilemapping.MachineLetter) []tilemapping.MachineLetter {
+	dst = dst[:0]
+	if !m.IsExchange() {
+		return dst
+	}
+	blanksMask := int(m.tm & BlanksBitMask)
+	for idx := 0; idx < m.TilesPlayed(); idx++ {
+		shifted := uint64(m.tm) & TBitMasks[idx]
+		tile := tilemapping.MachineLetter(shifted >> tilemapping.MachineLetter(20+6*idx))
+		if blanksMask&(1<<(idx+12)) > 0 {
+			tile = 0
+		}
+		dst = append(dst, tile)
+	}
+	return dst
 }
 
 func (m *SmallMove) CoordsAndVertical() (int, int, bool) {
@@ -91,4 +150,3 @@ func (m *SmallMove) CoordsAndVertical() (int, int, bool) {
 	}
 	return row, col, vert
 }
-

@@ -361,8 +361,32 @@ func (p *PreEndgamePlay) TotalOutcomes() int {
 	return total
 }
 
+func (p *PreEndgamePlay) PointRate() float32 {
+	p.RLock()
+	defer p.RUnlock()
+	total := 0
+	for _, el := range p.outcomesArray {
+		total += el.ct
+	}
+	if total == 0 {
+		return -1
+	}
+	return p.Points / float32(total)
+}
+
+func betterPreEndgamePlay(a, b *PreEndgamePlay) bool {
+	if b == nil {
+		return true
+	}
+	ar, br := a.PointRate(), b.PointRate()
+	if ar != br {
+		return ar > br
+	}
+	return a.Points > b.Points
+}
+
 type inFlightPermInfo struct {
-	play            string
+	play string
 	// Raw tile data instead of pre-formatted strings; strings are computed
 	// lazily in the 60-second status ticker to avoid per-perm allocs.
 	permInBag       []tilemapping.MachineLetter
@@ -426,23 +450,23 @@ type Solver struct {
 	avoidPruneMoves  []*move.Move
 	leaveCalc        equity.Leaves
 
-	earlyCutoffOptim bool
-	maxTilesLeft     int // -1 = no limit; skip plays leaving more than this many tiles in the bag. default 1
-	skipTiebreaker   bool
-	skipLossOptim        bool
-	iterativeDeepening   bool
-	nestedDepthLimit     int  // -1 = unlimited; default 1
-	skipDeepPass         bool // default true; forwarded to endgame solvers
+	earlyCutoffOptim   bool
+	maxTilesLeft       int // -1 = no limit; skip plays leaving more than this many tiles in the bag. default 1
+	skipTiebreaker     bool
+	skipLossOptim      bool
+	iterativeDeepening bool
+	nestedDepthLimit   int  // -1 = unlimited; default 1
+	skipDeepPass       bool // default true; forwarded to endgame solvers
 
-	numEndgamesSolved        atomic.Uint64
-	totalPerms               atomic.Uint32
-	numCutoffs               atomic.Uint64
-	numNestedCalls           atomic.Uint64
-	numSubPermsEvaluated     atomic.Uint64
-	maxNestedDepth           atomic.Uint64
-	nestedCacheHits          atomic.Uint64
-	nestedCacheMisses        atomic.Uint64
-	numNestedByBagSize       [InBagMaxLimit + 1]atomic.Uint64
+	numEndgamesSolved    atomic.Uint64
+	totalPerms           atomic.Uint32
+	numCutoffs           atomic.Uint64
+	numNestedCalls       atomic.Uint64
+	numSubPermsEvaluated atomic.Uint64
+	maxNestedDepth       atomic.Uint64
+	nestedCacheHits      atomic.Uint64
+	nestedCacheMisses    atomic.Uint64
+	numNestedByBagSize   [InBagMaxLimit + 1]atomic.Uint64
 	potentialWinnerMutex sync.RWMutex
 	minPotentialLosses   float32
 
@@ -462,11 +486,11 @@ type Solver struct {
 	arenas []*tinymove.SmallMoveArena
 
 	// Debug trace fields — zero-valued means tracing disabled.
-	traceWriter          io.Writer
+	traceWriter        io.Writer
 	traceTargetBagTail tilemapping.MachineWord // draw-order bag tiles to match (first drawn first)
-	traceOnce            bool
-	traceSeenMatch       atomic.Bool
-	traceMu              sync.Mutex
+	traceOnce          bool
+	traceSeenMatch     atomic.Bool
+	traceMu            sync.Mutex
 
 	// Eventuality explanation (single-thread, single-perm diagnostic mode).
 	// Active only when explainResult != nil. All collection sites are guarded.
@@ -535,11 +559,11 @@ func (s *Solver) SetLogStream(l io.Writer) {
 	s.logStream = l
 }
 
-func (s *Solver) SetTraceWriter(w io.Writer)        { s.traceWriter = w }
+func (s *Solver) SetTraceWriter(w io.Writer) { s.traceWriter = w }
 func (s *Solver) SetTraceTargetBagTail(tail tilemapping.MachineWord) {
 	s.traceTargetBagTail = tail
 }
-func (s *Solver) SetTraceOnce(once bool)            { s.traceOnce = once }
+func (s *Solver) SetTraceOnce(once bool) { s.traceOnce = once }
 
 // SubPermExplanation captures one row of the per-bag-tile outcome table
 // computed by a nested sub-PEG.
@@ -568,13 +592,13 @@ type NestedLevelExplanation struct {
 // outer-perm verdict, populated during eventuality-mode solve.
 type EventualityExplanation struct {
 	// Stage 1 — our outer play
-	OurPlay      string // e.g. "13M P(AH)"
-	OurScore     int
+	OurPlay       string // e.g. "13M P(AH)"
+	OurScore      int
 	OurRackBefore string // rack before outer play
-	OurRackAfter string // rack after outer play and draw
-	BagBefore    string // bag at outer-perm entry
-	BagAfter     string // bag after our play and draw
-	OppRack      string // opp rack at outer-perm entry
+	OurRackAfter  string // rack after outer play and draw
+	BagBefore     string // bag at outer-perm entry
+	BagAfter      string // bag after our play and draw
+	OppRack       string // opp rack at outer-perm entry
 
 	// Stage 2 — opp replies
 	TotalOppReplies int    // count of opp replies tried
@@ -662,12 +686,20 @@ func (s *Solver) Solve(ctx context.Context) ([]*PreEndgamePlay, error) {
 	s.movegen.SetGenPass(true)
 	// Don't allow pre-endgame opponent to use more than 7 tiles.
 	s.movegen.SetMaxTileUsage(7)
+	rootCanExchange := s.configurePEGMovegen(s.movegen, s.game)
+	if rootCanExchange {
+		// Exchanges introduce extra chance branches after the initial bag
+		// permutation, so count-based early cutoffs are no longer comparable
+		// across all candidate moves.
+		s.earlyCutoffOptim = false
+		s.skipLossOptim = false
+	}
 	// Examine high equity plays first.
 	var moves []*move.Move
 	if len(s.solveOnlyMoves) != 0 {
 		moves = s.solveOnlyMoves
 	} else {
-		moves = s.movegen.GenAll(s.game.RackFor(s.game.PlayerOnTurn()), false)
+		moves = s.movegen.GenAll(s.game.RackFor(s.game.PlayerOnTurn()), rootCanExchange)
 	}
 	c, err := equity.NewCombinedStaticCalculator(
 		s.game.LexiconName(), s.game.Config(), "", equity.PEGAdjustmentFilename)
@@ -788,22 +820,11 @@ func (s *Solver) Solve(ctx context.Context) ([]*PreEndgamePlay, error) {
 			// Copy the game so each endgame solver can manipulate it independently.
 			g := s.game.Copy()
 			g.SetBackupMode(game.SimulationMode)
-			// Size the state stack to cover the deepest path we can hit.
-			//
-			// recursiveSolve plays moves (both ours and opponent responses)
-			// until the bag empties or the game ends, then QuickAndDirtySolve
-			// recurses `curEndgamePlies` more levels via negamax. Each
-			// PlayMove/PlaySmallMove call pushes one state onto the stack.
-			//
-			// In the worst case, every tile play drains only one tile from
-			// the bag and each is interleaved with a forced-pass response
-			// (e.g. opponent has an unplayable rack). With two consecutive
-			// passes ending the game, the pattern "pass, tile, pass, tile,
-			// ..., pass, tile" reaches 2*numinbag PlayMove calls before the
-			// bag is empty. Negamax then adds up to curEndgamePlies more
-			// pushes. Add a small cushion for safety.
-			g.SetStateStackLength(2*s.numinbag + s.curEndgamePlies + 5)
-			g.SetEndgameMode(true)
+			// Size the state stack to cover the deepest PEG path. Spanish
+			// rules permit exchanges with a non-empty bag, so the bag may stay
+			// the same size across several scoreless turns; the six-scoreless-
+			// turn rule bounds those runs.
+			g.SetStateStackLength(game.DefaultMaxScorelessTurns*(s.numinbag+1) + s.curEndgamePlies + 10)
 			// Set a fixed order for the bag. This makes it easy for us to control
 			// what tiles we draw after making a move.
 			g.Bag().SetFixedOrder(true)

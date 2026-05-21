@@ -53,3 +53,18 @@ func TestRowToLettersMultichar(t *testing.T) {
 		is.Equal(parsed, tc.parsed)
 	}
 }
+
+func TestParseSpanishFILE2017CGP(t *testing.T) {
+	is := is.New(t)
+	cfg := config.DefaultConfig()
+	cfg.AdjustRelativePaths("..")
+
+	cgp := "BRO[CH]A2C3VEJO/3U1D1RO1FALO1/2ET1I1EX1AHE2/COSO1G1Y3E3/2T2APO[RR]eAIS2/1ZA3L4S3/2N2QUAD6/2C3ME7/1PANDEAS7/1UN1EH9/3DA10/URSINAs8/R5UTERINO2/G14/I14 ACDILÑS/BEEELMO 382/405 0 lex FILE2017"
+	g, err := ParseCGP(cfg, cgp)
+	is.NoErr(err)
+	is.Equal(g.LexiconName(), "FILE2017")
+	is.Equal(g.Rules().LetterDistributionName(), "spanish")
+	is.Equal(g.RackFor(0).String(), "ACDILÑS")
+	is.Equal(g.RackFor(1).String(), "BEEELMO")
+	is.Equal(g.PlayerOnTurn(), 0)
+}

@@ -1,8 +1,6 @@
 package movegen
 
 import (
-	"log"
-
 	"github.com/domino14/word-golib/tilemapping"
 	"github.com/samber/lo"
 
@@ -130,8 +128,14 @@ func AllPlaysSmallRecorder(gen MoveGenerator, rack *tilemapping.Rack, leftstrip,
 			uint8(length)))
 
 	case move.MoveTypeExchange:
-		// Not meant for this, yet.
-		log.Fatal("move type exchange is not compatible with SmallMove")
+		if rightstrip == 0 {
+			return
+		}
+		if rightstrip > gordonGen.maxCanExchange {
+			return
+		}
+		gordonGen.smallPlays = append(gordonGen.smallPlays,
+			tinymove.ExchangeMove(gordonGen.exchangestrip[:rightstrip]))
 	case move.MoveTypePass:
 		gordonGen.smallPlays = append(gordonGen.smallPlays, tinymove.PassMove())
 	default:

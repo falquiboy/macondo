@@ -16,7 +16,9 @@ import (
 	"github.com/domino14/macondo/config"
 	"github.com/domino14/macondo/game"
 	"github.com/domino14/macondo/gcgio"
+	pb "github.com/domino14/macondo/gen/api/proto/macondo"
 	"github.com/domino14/macondo/move"
+	"github.com/domino14/macondo/movegen"
 	"github.com/domino14/macondo/testhelpers"
 )
 
@@ -83,6 +85,62 @@ func TestMoveTilesToBeginning(t *testing.T) {
 		is.Equal(bagTiles[0], tilemapping.MachineLetter(5))
 		is.Equal(ct(bag, 5, 4), 8)
 	}
+}
+
+func TestSpanishPEGMovegenAllowsExchangeWithOneInBag(t *testing.T) {
+	is := is.New(t)
+	rules, err := game.NewBasicGameRules(
+		DefaultConfig, "", "CrosswordGame", "spanish",
+		game.CrossScoreOnly, game.VarClassic)
+	is.NoErr(err)
+	rules.SetExchangeLimit(1)
+	g, err := game.NewGame(rules, []*pb.PlayerInfo{
+		{Nickname: "player1"},
+		{Nickname: "player2"},
+	})
+	is.NoErr(err)
+	g.StartGame()
+	bagTiles := g.Bag().Peek()
+	err = g.Bag().RemoveTiles(bagTiles[:len(bagTiles)-1])
+	is.NoErr(err)
+
+	gd, err := kwg.GetKWG(DefaultConfig.WGLConfig(), "FILE2017")
+	is.NoErr(err)
+	mg := movegen.NewGordonGenerator(gd, g.Board(), g.Bag().LetterDistribution())
+	peg := new(Solver)
+	addExchange := peg.configurePEGMovegen(mg, g)
+	is.Equal(addExchange, true)
+
+	rack := tilemapping.RackFromString("QQQQQQQ", g.Alphabet())
+	plays := mg.GenAll(rack, addExchange)
+	foundExchange := false
+	for _, play := range plays {
+		if play.Action() == move.MoveTypeExchange {
+			foundExchange = true
+			is.Equal(play.TilesPlayed(), 1)
+			break
+		}
+	}
+	is.True(foundExchange)
+}
+
+func TestPEGMaxTilesLeftDoesNotFilterExchange(t *testing.T) {
+	is := is.New(t)
+	alph := testhelpers.EnglishAlphabet()
+	peg := &Solver{maxTilesLeft: 1}
+	exchange := move.NewExchangeMove(
+		tilemapping.MachineWord{1},
+		tilemapping.MachineWord{2, 3, 4, 5, 6, 7},
+		alph,
+	)
+	is.Equal(peg.skipMoveForMaxTilesLeft(exchange, 3), false)
+
+	play := move.NewScoringMove(10,
+		tilemapping.MachineWord{1},
+		tilemapping.MachineWord{2, 3, 4, 5, 6, 7},
+		false, 1, alph, 7, 7,
+	)
+	is.Equal(peg.skipMoveForMaxTilesLeft(play, 3), true)
 }
 
 func Test1PEGPass(t *testing.T) {

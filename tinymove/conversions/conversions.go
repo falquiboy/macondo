@@ -13,6 +13,18 @@ import (
 
 func SmallMoveToMove(sm tinymove.SmallMove, m *move.Move, tm *tilemapping.TileMapping,
 	bd *board.GameBoard, onTurnRack *tilemapping.Rack) {
+	if sm.IsExchange() {
+		var buf [7]tilemapping.MachineLetter
+		tiles := sm.ExchangeTiles(buf[:0])
+		exchanged := make(tilemapping.MachineWord, len(tiles))
+		copy(exchanged, tiles)
+		leave, err := tilemapping.Leave(onTurnRack.TilesOn(), exchanged, false)
+		if err != nil {
+			panic(err)
+		}
+		m.Set(exchanged, leave, 0, 0, 0, len(exchanged), false, move.MoveTypeExchange, tm)
+		return
+	}
 	TinyMoveToMove(sm.TinyMove(), bd, m)
 	// populate move with missing fields.
 	m.SetAlphabet(tm)
@@ -30,6 +42,21 @@ func SmallMoveToMove(sm tinymove.SmallMove, m *move.Move, tm *tilemapping.TileMa
 	}
 	m.SetLeave(leave)
 	m.SetScore(int(sm.Score()))
+}
+
+func MoveToSmallMove(m *move.Move) tinymove.SmallMove {
+	switch m.Action() {
+	case move.MoveTypePass:
+		return tinymove.PassMove()
+	case move.MoveTypeExchange:
+		return tinymove.ExchangeMove(m.Tiles())
+	case move.MoveTypePlay:
+		tm := MoveToTinyMove(m)
+		return tinymove.TilePlayMove(tm, int16(m.Score()),
+			uint8(m.TilesPlayed()), uint8(m.PlayLength()))
+	default:
+		return tinymove.PassMove()
+	}
 }
 
 func MoveToTinyMove(m *move.Move) tinymove.TinyMove {
