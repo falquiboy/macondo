@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/domino14/word-golib/kwg"
+	"github.com/domino14/word-golib/tilemapping"
 	"github.com/matryer/is"
 
 	"github.com/domino14/macondo/cgp"
@@ -80,4 +81,100 @@ func TestPEGSpanishExchangesPostOppFillCap(t *testing.T) {
 	// exchange we should ever emit is 2 — anything bigger would crash
 	// per-perm evaluation.
 	is.True(maxExch <= 2)
+}
+
+// TestPEGSpanishExchangeOutcomeConsistency is a regression test for a
+// double-counting bug in exchange evaluation. With 1 tile in the bag, an
+// outer PEG over Spanish has 8 distinct opp-tile scenarios (one per unseen
+// tile). For any single-move solve (-only-solve), TotalOutcomes() must equal
+// 8 multiplied by a clean post-exchange branching factor (1 or the number of
+// post-shuffle bag permutations). The buggy state observed at endgame ply 1
+// reports TotalOutcomes=15 (8 wins under the extended branchOption.mls key +
+// 7 losses under the original inbagOption.mls key), making %Win = 8/15 =
+// 53.33% and inflating PointRate above genuine tile plays.
+//
+// Position: post-Spanish-opening; rack ABCEGJL trailing 374-409 with 1
+// unseen pool of {A,C,D,E,H,I,N,T}. Only opp=A could give the side a
+// theoretical win; the deeper search (ply ≥ 2) correctly returns 0 wins
+// for (exch C).
+//
+// The test asserts the basic invariant: TotalOutcomes() % numOppScenarios
+// == 0, where numOppScenarios = 8 here. Currently fails at ply 1, passes
+// at ply ≥ 2.
+func TestPEGSpanishExchangeOutcomeConsistency(t *testing.T) {
+	is := is.New(t)
+
+	cgpStr := "3B11/3U8SE1/3G8OH1/3L8N2/3EA7R1I/4C7E1Z/" +
+		"4O1A1UtOPICO/1M2L1PUYO2R1T/1A2[CH]1R7E/" +
+		"ASOMARES1Q3X1/1E2S1S2U2TI1/TA1DESA[RR]IENDA2/" +
+		"AD4R5L2/ÑO3FA5U2/Es2[LL]ENO2VIDON " +
+		"ABCEGJL/ 374/409 0 lex FILE2017;"
+
+	g, err := cgp.ParseCGP(DefaultConfig, cgpStr)
+	if err != nil {
+		t.Skipf("ParseCGP failed (likely missing FILE2017 lexicon data): %v", err)
+	}
+	g.RecalculateBoard()
+
+	gd, err := kwg.GetKWG(DefaultConfig.WGLConfig(), "FILE2017")
+	if err != nil {
+		t.Skipf("FILE2017 KWG not available: %v", err)
+	}
+
+	alph := g.Alphabet()
+	exchanged := tilemapping.RackFromString("C", alph).TilesOn()
+	leave := tilemapping.RackFromString("ABEGJL", alph).TilesOn()
+	exchMove := move.NewExchangeMove(exchanged, leave, alph)
+
+	// Number of distinct opp-tile scenarios = unseen tiles when bag has 1.
+	// Opponent's full rack of 7 is hidden, plus 1 in bag = 8 unseen tiles,
+	// all distinct here.
+	const numOppScenarios = 8
+
+	runAtPly := func(plies int) *PreEndgamePlay {
+		peg := new(Solver)
+		err := peg.Init(g.Game, gd)
+		is.NoErr(err)
+		peg.SetThreads(2)
+		peg.SetEndgamePlies(plies)
+		peg.SetIterativeDeepening(false)
+		peg.SetSolveOnly([]*move.Move{exchMove})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		plays, err := peg.Solve(ctx)
+		is.NoErr(err)
+		is.True(len(plays) >= 1)
+		return plays[0]
+	}
+
+	ply1 := runAtPly(1)
+	ply4 := runAtPly(4)
+
+	t.Logf("ply1: Points=%.2f FoundLosses=%.2f TotalOutcomes=%d PointRate=%.4f",
+		ply1.Points, ply1.FoundLosses, ply1.TotalOutcomes(), ply1.PointRate())
+	t.Logf("ply4: Points=%.2f FoundLosses=%.2f TotalOutcomes=%d PointRate=%.4f",
+		ply4.Points, ply4.FoundLosses, ply4.TotalOutcomes(), ply4.PointRate())
+
+	// Invariant #1: TotalOutcomes must be a clean multiple of the number of
+	// outer opp-tile scenarios. Asymmetric enumeration (wins under extended
+	// key, losses under original key) produces a non-multiple — the bug.
+	is.Equal(ply1.TotalOutcomes()%numOppScenarios, 0)
+	is.Equal(ply4.TotalOutcomes()%numOppScenarios, 0)
+
+	// Invariant #2: Points + FoundLosses == TotalOutcomes. Every outcome
+	// entry contributes its count to exactly one of {Points, FoundLosses}
+	// (with PEGDraw splitting halves). For a position with no draws this
+	// is a strict equality.
+	is.Equal(int(ply1.Points+ply1.FoundLosses), ply1.TotalOutcomes())
+	is.Equal(int(ply4.Points+ply4.FoundLosses), ply4.TotalOutcomes())
+
+	// Invariant #3: PointRate is bounded by [0, 1]. With 8 wins reported
+	// against 15 outcomes (bug state), the rate is 0.5333 — technically
+	// in range but only because the inflation happens on both sides.
+	// What matters is that the rate at ply 1 should not exceed the rate
+	// of a genuinely winning play in the same position. Tile plays here
+	// peak at 1/8 = 0.125; the exchange's true rate is also ≤ 0.125
+	// (it loses 7/8 scenarios outright and at best ties the 8th).
+	is.True(ply1.PointRate() <= 0.125+1e-4)
 }
