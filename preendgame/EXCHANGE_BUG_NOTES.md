@@ -1,8 +1,7 @@
 # PEG Exchange — Double-Counting Bug
 
-**Status:** Known bug, regression test in place
-(`TestPEGSpanishExchangeOutcomeConsistency` in `peg_spanish_regression_test.go`),
-fix not yet applied.
+**Status:** Fixed with approach A. Regression coverage lives in
+`TestPEGSpanishExchangeOutcomeConsistency` in `peg_spanish_regression_test.go`.
 
 **Affects:** Spanish PEG (and any future configuration where
 `MaxCanExchange(bag, ExchangeLimit) > 0`). English/CSW unaffected because
@@ -76,9 +75,9 @@ matching inflation on the denominator's *independent-scenario* portion.
 
 ---
 
-## Suggested fix direction
+## Fix direction
 
-Three plausible approaches, in order of invasiveness:
+Approach A was applied. The other candidates are kept here for context.
 
 ### A. Collapse post-exchange branches at the exchange boundary (preferred)
 

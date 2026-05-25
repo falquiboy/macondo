@@ -1207,12 +1207,17 @@ func (s *Solver) recursiveSolveExchange(ctx context.Context, thread int, pegPlay
 		postExchangeBagCounts[int(t)]++
 	}
 	postExchangePerms := generatePermutations(postExchangeBagCounts, len(bagBefore))
+	aggregateOutcome := PEGNotInitialized
 
 	for pi, postPerm := range postExchangePerms {
 		postTiles := permutationTiles(postPerm)
 		branchOption := inbagOption
-		branchOption.ct = inbagOption.ct * postPerm.Count
+		branchOption.ct = postPerm.Count
 		branchOption.mls = pegBranchKey(inbagOption.mls, postTiles)
+		// Keep post-exchange randomness out of the root outcome table. Each
+		// shuffled branch is resolved independently, then collapsed back onto
+		// the original outer bag option below.
+		branchPlay := &PreEndgamePlay{Play: pegPlay.Play}
 
 		if _, err := g.PlaySmallMoveWithDraw(&moveToMake); err != nil {
 			return err
@@ -1228,14 +1233,59 @@ func (s *Solver) recursiveSolveExchange(ctx context.Context, thread int, pegPlay
 				g.ScorelessTurns())
 		}
 
-		err := s.continueAfterPEGMove(ctx, thread, pegPlay, moveToMake, branchOption,
-			winnerChan, depth, pegPlayEmptiesBag, fullSolve, nestedDepth)
+		err := s.continueAfterPEGMove(ctx, thread, branchPlay, moveToMake, branchOption,
+			nil, depth, pegPlayEmptiesBag, fullSolve, nestedDepth)
 		g.UnplayLastMove()
 		if err != nil {
 			return err
 		}
+		branchPlay.finalize()
+		branchOutcome, found := collapsedExchangeBranchOutcome(branchPlay, branchOption.mls)
+		if !found {
+			continue
+		}
+		aggregateOutcome = combineExchangeOutcomes(aggregateOutcome, branchOutcome)
+	}
+	if aggregateOutcome == PEGNotInitialized {
+		return nil
+	}
+	if pegPlayEmptiesBag {
+		pegPlay.addWinPctStat(aggregateOutcome, inbagOption.ct, inbagOption.mls)
+		if winnerChan != nil {
+			winnerChan <- pegPlay.Copy()
+		}
+	} else {
+		pegPlay.setUnfinalizedWinPctStat(aggregateOutcome, inbagOption.ct, inbagOption.mls)
 	}
 	return nil
+}
+
+func collapsedExchangeBranchOutcome(play *PreEndgamePlay, branchKey []tilemapping.MachineLetter) (PEGOutcome, bool) {
+	if outcome := play.OutcomeFor(branchKey); outcome != PEGNotInitialized {
+		return outcome, true
+	}
+	outcomes := play.OutcomesArray()
+	if len(outcomes) == 0 {
+		return PEGNotInitialized, false
+	}
+	aggregate := PEGNotInitialized
+	for _, outcome := range outcomes {
+		if outcome.outcome == PEGNotInitialized {
+			continue
+		}
+		aggregate = combineExchangeOutcomes(aggregate, outcome.outcome)
+	}
+	return aggregate, aggregate != PEGNotInitialized
+}
+
+func combineExchangeOutcomes(a, b PEGOutcome) PEGOutcome {
+	if a == PEGNotInitialized {
+		return b
+	}
+	if b == PEGNotInitialized || a == b {
+		return a
+	}
+	return PEGDraw
 }
 
 // allocSortedReplies generates all legal replies for the player currently on turn,
