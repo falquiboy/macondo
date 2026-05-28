@@ -168,3 +168,100 @@ MACONDO_DATA_PATH=$(pwd)/data go test ./preendgame/ \
 
 Currently fails with `7 != 0` on the first assertion. Will pass when
 the fix lands.
+
+---
+---
+
+# PEG Exchange — State-Stack Overflow on 3-in-bag (separate bug)
+
+**Status:** Open. Regression coverage lives in
+`TestPEGSpanish3InBagExchangeNoPanic` (skip-gated so it does not crash the
+package binary). This is a *different* bug from the double-counting one
+above — it is a hard crash, not a wrong number.
+
+**Affects:** Spanish PEG on positions with **≥ 3 tiles in the bag** where
+exchanges are legal. The 1-in-bag cases above never reach the depth that
+triggers it. English/CSW unaffected (no exchanges in PEG).
+
+## Symptom
+
+`peg -endgameplies 4 -threads 8 -maxtime 180` on:
+
+```
+3HA[CH]EES6/3U11/2HILADOR6/3L3C7/2MOFO1UNCE4/6OLEEN4/5S1T2R1T2/
+AEROLITO1BI[RR]EMe/P4U4A1R2/AJ3X3ADUCEN/RA1O6O1E1I/CIÑAS7T1E/
+ASA9O1G/D11S1A/o13N DENPUYZ/ 409/407 0 lex FILE2017;
+```
+
+(rack `DENPUYZ`, score 409-407, **bag = 3**, unseen pool = 10) panics:
+
+```
+panic: runtime error: index out of range [57] with length 57
+  game/backup.go:46                      st := g.stateStack[g.stackPtr]
+  preendgame/peg_generic.go:1606         nestedOurTurnSolve
+  preendgame/peg_generic.go:1315         iterateOurReplies
+  preendgame/peg_generic.go:1171         continueAfterPEGMove
+  preendgame/peg_generic.go:1231         recursiveSolveExchange
+  preendgame/peg_generic.go:1128         recursiveSolve
+  preendgame/peg_generic.go:962          processJobPerPlay
+  preendgame/peg_generic.go:784          handleJobGeneric
+```
+
+`g.stackPtr` runs off the end of `g.stateStack`.
+
+## Root cause
+
+`Solve()` sizes the per-endgame state stack (peg.go ≈ line 827):
+
+```go
+g.SetStateStackLength(game.DefaultMaxScorelessTurns*(s.numinbag+1) +
+                      s.curEndgamePlies + 10)
+```
+
+`DefaultMaxScorelessTurns = 6`. The formula assumes each "bag level" admits
+at most 6 scoreless turns before the six-scoreless-turn rule ends the game.
+That bound is correct for the *top-level* PEG line, but the **nested**
+solver (`recursiveSolveExchange → continueAfterPEGMove → iterateOurReplies
+→ nestedOurTurnSolve`) descends through additional exchange/our-reply/
+opp-reply frames, each calling `backupState` (a stack push). With 3 in the
+bag and both sides able to exchange, the live push depth exceeds the
+allocated length and `backupState` indexes past the end.
+
+This is the same failure mode `52cc48f` fixed for the per-perm path
+(backupState runs before validity checks, UnplayLastMove is skipped on
+error → leaked pushes). That fix sized the stack for the top-level
+exchange line; it did not account for the extra depth the nested solver
+adds on multi-tile-in-bag positions.
+
+## Suggested fix direction
+
+Two complementary options:
+
+1. **Grow the bound to cover nested depth.** The nested recursion adds up
+   to `nestedDepthLimit` extra plies, each of which can host its own
+   scoreless run. A safe (if loose) bound multiplies the scoreless headroom
+   by the nesting factor, e.g.
+   `DefaultMaxScorelessTurns*(numinbag+1)*(nestedDepthLimit+1) +
+    curEndgamePlies + 10`, or derive the true max push depth analytically
+   from the recursion structure.
+
+2. **Make `backupState` grow the stack on demand** instead of indexing a
+   fixed slice — append a fresh `stateBackup` when `stackPtr` reaches
+   `len(stateStack)`. This removes the whole class of "stack too small"
+   crashes at the cost of a rare allocation. Cleaner long-term; touches
+   `game/backup.go` shared by all callers, so needs broader review.
+
+Option 2 is the more durable fix; option 1 is the smaller, PEG-local
+change.
+
+## Reproducer
+
+```bash
+# Un-skip TestPEGSpanish3InBagExchangeNoPanic first, then:
+MACONDO_DATA_PATH=$(pwd)/data go test ./preendgame/ \
+  -run TestPEGSpanish3InBagExchangeNoPanic -v
+```
+
+Currently crashes the test binary with the index-out-of-range panic. Will
+pass once the stack sizing (or growth strategy) covers the nested exchange
+depth.

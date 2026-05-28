@@ -178,3 +178,70 @@ func TestPEGSpanishExchangeOutcomeConsistency(t *testing.T) {
 	// (it loses 7/8 scenarios outright and at best ties the 8th).
 	is.True(ply1.PointRate() <= 0.125+1e-4)
 }
+
+// TestPEGSpanish3InBagExchangeNoPanic is a regression test for a state-stack
+// overflow that crashes the solver on a 3-tile-in-bag Spanish position where
+// exchanges are legal. The panic surfaces as:
+//
+//	panic: runtime error: index out of range [57] with length 57
+//	  game/backup.go:46  (st := g.stateStack[g.stackPtr])
+//	  ...
+//	  preendgame/peg_generic.go recursiveSolveExchange → continueAfterPEGMove
+//	  → iterateOurReplies → nestedOurTurnSolve
+//
+// Root cause: the state-stack length set in Solve()
+//
+//	g.SetStateStackLength(game.DefaultMaxScorelessTurns*(s.numinbag+1) +
+//	                      s.curEndgamePlies + 10)
+//
+// bounds scoreless-turn runs at DefaultMaxScorelessTurns (6) per bag level.
+// With 3 in the bag and exchanges legal for both sides, the nested PEG
+// recursion (recursiveSolveExchange replays the exchange and descends into
+// opponent replies, our replies, and further nested solves) pushes more
+// backup frames than that bound anticipates, so g.stackPtr runs past the
+// end of g.stateStack. This is the same *class* of bug fixed in 52cc48f
+// for the top-level per-perm path, but reached via the nested-solve path
+// that fix did not cover.
+//
+// The earlier 52cc48f fix sized the stack for the top-level exchange path;
+// this position exercises the deeper nested recursion. The test asserts the
+// solver completes without panicking. It is skipped (rather than left to
+// crash the whole package binary, since the panic originates in a worker
+// goroutine and re-panics through handleJobGeneric's recover) until the
+// stack sizing covers the nested exchange depth.
+func TestPEGSpanish3InBagExchangeNoPanic(t *testing.T) {
+	t.Skip("KNOWN CRASH: state-stack overflow in nested exchange recursion " +
+		"(game/backup.go:46). Un-skip once Solve() sizes the stack for the " +
+		"nested-solve exchange depth, not just the top-level per-perm path.")
+
+	is := is.New(t)
+
+	cgpStr := "3HA[CH]EES6/3U11/2HILADOR6/3L3C7/2MOFO1UNCE4/" +
+		"6OLEEN4/5S1T2R1T2/AEROLITO1BI[RR]EMe/P4U4A1R2/" +
+		"AJ3X3ADUCEN/RA1O6O1E1I/CIÑAS7T1E/ASA9O1G/" +
+		"D11S1A/o13N DENPUYZ/ 409/407 0 lex FILE2017;"
+
+	g, err := cgp.ParseCGP(DefaultConfig, cgpStr)
+	if err != nil {
+		t.Skipf("ParseCGP failed (likely missing FILE2017 lexicon data): %v", err)
+	}
+	g.RecalculateBoard()
+
+	gd, err := kwg.GetKWG(DefaultConfig.WGLConfig(), "FILE2017")
+	if err != nil {
+		t.Skipf("FILE2017 KWG not available: %v", err)
+	}
+
+	peg := new(Solver)
+	err = peg.Init(g.Game, gd)
+	is.NoErr(err)
+	peg.SetThreads(2)
+	peg.SetEndgamePlies(2)
+	peg.SetIterativeDeepening(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	// Currently panics inside a worker goroutine before returning.
+	_, err = peg.Solve(ctx)
+	is.NoErr(err)
+}
