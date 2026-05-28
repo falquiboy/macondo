@@ -75,6 +75,32 @@ func TestBackup(t *testing.T) {
 	is.Equal(game.players[0].rackLetters(), "?ACEOTV")
 }
 
+func TestBackupStateStackGrows(t *testing.T) {
+	is := is.New(t)
+	players := []*pb.PlayerInfo{
+		{Nickname: "JD"},
+		{Nickname: "cesar"},
+	}
+	rules, err := NewBasicGameRules(
+		DefaultConfig, "", board.CrosswordGameLayout, "english",
+		CrossScoreOnly, "")
+	is.NoErr(err)
+	g, err := NewGame(rules, players)
+	is.NoErr(err)
+	g.StartGame()
+	g.SetStateStackLength(1)
+	g.SetBackupMode(SimulationMode)
+
+	g.backupState()
+	g.backupState()
+
+	is.True(len(g.stateStack) >= 2)
+	is.Equal(g.stackPtr, 2)
+	g.restoreLastBackup()
+	g.restoreLastBackup()
+	is.Equal(g.stackPtr, 0)
+}
+
 func TestPlaySmallExchangeWithDraw(t *testing.T) {
 	is := is.New(t)
 	players := []*pb.PlayerInfo{

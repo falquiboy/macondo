@@ -174,10 +174,10 @@ the fix lands.
 
 # PEG Exchange — State-Stack Overflow on 3-in-bag (separate bug)
 
-**Status:** Open. Regression coverage lives in
-`TestPEGSpanish3InBagExchangeNoPanic` (skip-gated so it does not crash the
-package binary). This is a *different* bug from the double-counting one
-above — it is a hard crash, not a wrong number.
+**Status:** Fixed by making `game.backupState` grow the simulation stack on
+demand. Regression coverage lives in `TestPEGSpanish3InBagExchangeNoPanic`.
+This is a *different* bug from the double-counting one above — it is a hard
+crash, not a wrong number.
 
 **Affects:** Spanish PEG on positions with **≥ 3 tiles in the bag** where
 exchanges are legal. The 1-in-bag cases above never reach the depth that
@@ -233,9 +233,9 @@ error → leaked pushes). That fix sized the stack for the top-level
 exchange line; it did not account for the extra depth the nested solver
 adds on multi-tile-in-bag positions.
 
-## Suggested fix direction
+## Fix direction
 
-Two complementary options:
+Option 2 was applied. The original options are kept here for context:
 
 1. **Grow the bound to cover nested depth.** The nested recursion adds up
    to `nestedDepthLimit` extra plies, each of which can host its own
@@ -262,6 +262,5 @@ MACONDO_DATA_PATH=$(pwd)/data go test ./preendgame/ \
   -run TestPEGSpanish3InBagExchangeNoPanic -v
 ```
 
-Currently crashes the test binary with the index-out-of-range panic. Will
-pass once the stack sizing (or growth strategy) covers the nested exchange
-depth.
+This test now passes once the backup stack can grow past the initial PEG
+depth estimate.

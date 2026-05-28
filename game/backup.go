@@ -43,6 +43,9 @@ func (g *Game) backupState() {
 	if g.backupMode == InteractiveGameplayMode {
 		g.stackPtr = 0
 	}
+	if g.stackPtr >= len(g.stateStack) {
+		g.growStateStack()
+	}
 	st := g.stateStack[g.stackPtr]
 
 	st.board.CopyFrom(g.board)
@@ -55,6 +58,29 @@ func (g *Game) backupState() {
 	st.players.copyFrom(g.players)
 	if g.backupMode == SimulationMode {
 		g.stackPtr++
+	}
+}
+
+func (g *Game) growStateStack() {
+	if len(g.stateStack) == 0 {
+		g.SetStateStackLength(1)
+		return
+	}
+	newLen := len(g.stateStack) * 2
+	for newLen <= g.stackPtr {
+		newLen *= 2
+	}
+	for len(g.stateStack) < newLen {
+		g.stateStack = append(g.stateStack, &stateBackup{
+			board:              g.board.Copy(),
+			bag:                g.bag.Copy(),
+			playing:            g.playing,
+			scorelessTurns:     g.scorelessTurns,
+			lastScorelessTurns: g.lastScorelessTurns,
+			onturn:             g.onturn,
+			turnnum:            g.turnnum,
+			players:            copyPlayers(g.players),
+		})
 	}
 }
 

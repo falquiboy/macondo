@@ -205,15 +205,8 @@ func TestPEGSpanishExchangeOutcomeConsistency(t *testing.T) {
 //
 // The earlier 52cc48f fix sized the stack for the top-level exchange path;
 // this position exercises the deeper nested recursion. The test asserts the
-// solver completes without panicking. It is skipped (rather than left to
-// crash the whole package binary, since the panic originates in a worker
-// goroutine and re-panics through handleJobGeneric's recover) until the
-// stack sizing covers the nested exchange depth.
+// solver completes without panicking.
 func TestPEGSpanish3InBagExchangeNoPanic(t *testing.T) {
-	t.Skip("KNOWN CRASH: state-stack overflow in nested exchange recursion " +
-		"(game/backup.go:46). Un-skip once Solve() sizes the stack for the " +
-		"nested-solve exchange depth, not just the top-level per-perm path.")
-
 	is := is.New(t)
 
 	cgpStr := "3HA[CH]EES6/3U11/2HILADOR6/3L3C7/2MOFO1UNCE4/" +
