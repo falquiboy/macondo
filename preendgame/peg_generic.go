@@ -469,7 +469,9 @@ func (s *Solver) maybeTiebreak(ctx context.Context, maybeInBagTiles []int) error
 	// (see issue #476: a Pass play in the analyzer was reporting an
 	// avgSpread of 27315 instead of values in the typical 60-70 range).
 	for i := range numWinners {
-		if s.plays[i].Play.TilesPlayed() >= s.numinbag {
+		// Exchanges never empty the bag even when TilesPlayed() >= numinbag
+		// (they draw and put back), so they must not reach the spread tiebreak.
+		if s.plays[i].Play.Action() == move.MoveTypePlay && s.plays[i].Play.TilesPlayed() >= s.numinbag {
 			topPlayIdxs = append(topPlayIdxs, i)
 		}
 	}
@@ -499,7 +501,8 @@ func (s *Solver) maybeTiebreak(ctx context.Context, maybeInBagTiles []int) error
 	// is unreliable and would be excluded anyway.
 	avoidPruneIdxs := []int{}
 	for i := range numWinners {
-		if s.shouldAvoidPrune(s.plays[i].Play) && s.plays[i].Play.TilesPlayed() >= s.numinbag {
+		if s.shouldAvoidPrune(s.plays[i].Play) && s.plays[i].Play.Action() == move.MoveTypePlay &&
+			s.plays[i].Play.TilesPlayed() >= s.numinbag {
 			avoidPruneIdxs = append(avoidPruneIdxs, i)
 		}
 	}
